@@ -51,6 +51,7 @@ func main() {
 		}
 		return gojq.NewDecoder(f).DecodePath(jsPath, func(message json.RawMessage) error {
 			_, err := os.Stdout.Write(message)
+			_, err = os.Stdout.Write(newLine)
 			return err
 		})
 	}
@@ -60,3 +61,5 @@ func main() {
 		log.Fatal(err)
 	}
 }
+
+var newLine = []byte("\n")

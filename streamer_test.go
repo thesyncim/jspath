@@ -388,7 +388,7 @@ func TestDecodeSimpleTypes(t *testing.T) {
 		},
 		{
 			name: "stream array match",
-			path: "$.[0].abc",
+			path: "$.[*].abc",
 			input: `[{"abc":67}]
                    [{"abc":68}]
                    [{"abc":69}]`,
