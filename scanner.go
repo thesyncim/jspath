@@ -62,7 +62,7 @@ type scanner struct {
 	// Error that happened, if any.
 	syntaxErr SyntaxError
 
-	// total bytes consumed, updated by decoder.Decode
+	// total bytes consumed, updated by decoderWithoutKey.Decode
 	bytes int64
 }
 

@@ -3,9 +3,10 @@ package gojq
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/gobwas/glob"
 	"io"
 	"strings"
+
+	"github.com/gobwas/glob"
 )
 
 // A PathDecoder reads and decodes JSON values from an input stream at specified path.
@@ -28,9 +29,9 @@ type PathDecoder struct {
 
 type matcher func(d *PathBuilder, jsPath string) bool
 
-// NewDecoder returns a new decoder that reads from r.
+// NewDecoder returns a new decoderWithoutKey that reads from r.
 //
-// The decoder introduces its own buffering and may
+// The decoderWithoutKey introduces its own buffering and may
 // read data from r beyond the JSON values requested.
 func NewDecoder(r io.Reader) *PathDecoder {
 	return &PathDecoder{r: r, path: NewPathBuilder()}
@@ -393,15 +394,43 @@ func (dec *PathDecoder) Token() (Token, error) {
 	}
 }
 
-func (dec *PathDecoder) DecodePath(path string, decodeFunc func(message json.RawMessage) error) (err error) {
+type RawDecoder func(message json.RawMessage) error
+
+type RawDecoderKey func(key string, message json.RawMessage) error
+
+func (dec *PathDecoder) DecodePath(path string, decoder RawDecoder) (err error) {
 	matcher, err := compilePath(path)
 	if err != nil {
 		return err
 	}
-	return dec.decodePath(path, decodeFunc, matcher)
+	return dec.decodePath(path, decoderWithoutKey(decoder), matcher)
 }
 
-func (dec *PathDecoder) decodePath(jsPath string, decodeFunc func(message json.RawMessage) error, matchPath matcher) (err error) {
+func (dec *PathDecoder) DecodePathKey(path string, decoder RawDecoderKey) (err error) {
+	matcher, err := compilePath(path)
+	if err != nil {
+		return err
+	}
+	return dec.decodePath(path, decoderWithKey(decoder), matcher)
+}
+
+type Decoder interface {
+	Decode(key string, message json.RawMessage) error
+}
+
+type decoderWithoutKey func(message json.RawMessage) error
+
+func (d decoderWithoutKey) Decode(key string, message json.RawMessage) error {
+	return d(message)
+}
+
+type decoderWithKey func(key string, message json.RawMessage) error
+
+func (d decoderWithKey) Decode(key string, message json.RawMessage) error {
+	return d(key, message)
+}
+
+func (dec *PathDecoder) decodePath(jsPath string, decodeFunc Decoder, matchPath matcher) (err error) {
 	for {
 		c, err := dec.Peek()
 		if err != nil {
@@ -422,7 +451,6 @@ func (dec *PathDecoder) decodePath(jsPath string, decodeFunc func(message json.R
 			dec.tokenState = tokenArrayStart
 			if dec.More() {
 				dec.path.StartArray()
-
 				if match {
 					for {
 						if !dec.More() {
@@ -432,7 +460,7 @@ func (dec *PathDecoder) decodePath(jsPath string, decodeFunc func(message json.R
 						if err != nil {
 							return err
 						}
-						if err := decodeFunc(bytes); err != nil {
+						if err := decodeFunc.Decode(dec.path.Path(), bytes); err != nil {
 							return err
 						}
 					}
@@ -461,7 +489,7 @@ func (dec *PathDecoder) decodePath(jsPath string, decodeFunc func(message json.R
 					if err != nil {
 						return err
 					}
-					if err := decodeFunc(bytes); err != nil {
+					if err := decodeFunc.Decode(dec.path.Path(), bytes); err != nil {
 						return err
 					}
 					continue
@@ -469,9 +497,8 @@ func (dec *PathDecoder) decodePath(jsPath string, decodeFunc func(message json.R
 			}
 			dec.scanp++
 			dec.tokenStack = append(dec.tokenStack, dec.tokenState)
-			dec.path.StartObject()
 			dec.tokenState = tokenObjectStart
-
+			dec.path.StartObject()
 			continue
 
 		case '}':
@@ -516,8 +543,8 @@ func (dec *PathDecoder) decodePath(jsPath string, decodeFunc func(message json.R
 				if err != nil {
 					return err
 				}
-				dec.path.SetObjectKey(keyBytes[1 : len(keyBytes)-1])
 				dec.tokenState = tokenObjectColon
+				dec.path.SetObjectKey(keyBytes[1 : len(keyBytes)-1])
 				continue
 			}
 			fallthrough
@@ -531,7 +558,7 @@ func (dec *PathDecoder) decodePath(jsPath string, decodeFunc func(message json.R
 				return err
 			} else {
 				if matchPath(dec.path, jsPath) {
-					if err := decodeFunc(bytes); err != nil {
+					if err := decodeFunc.Decode(dec.path.Path(), bytes); err != nil {
 						return err
 					}
 				}
