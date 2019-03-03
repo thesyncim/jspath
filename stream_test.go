@@ -55,8 +55,8 @@ func TestDecodePath(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "stream array match",
-			path: "$.store.book",
+			name: "stream array wildcard",
+			path: "$.store.book[*]",
 			want: []string{
 				`{
                 "category": "reference",
@@ -99,20 +99,15 @@ func TestDecodePath(t *testing.T) {
 			},
 		},
 		{
-			name: "index array 2",
+			name: "index array",
+			path: "$.store.book[-1]",
+			want: nil,
+		},
+		{
+			name: "array index with property",
 			path: "$.store.book[0].price",
 			want: []string{
 				`8.95`,
-			},
-		},
-		{
-			name: "simple",
-			path: "$.store.bicycle",
-			want: []string{
-				`{
-            "color": "red",
-            "price": 19.95
-        }`,
 			},
 		},
 		{
