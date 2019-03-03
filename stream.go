@@ -245,7 +245,7 @@ func (dec *StreamDecoder) Decode(itemDecoders ...UnmarshalerStream) (err error) 
 
 	select {
 	case <-dec.context.Done():
-		close(dec.done)
+		//close(dec.done)
 		return dec.context.Err()
 	case doneErr := <-dec.Done():
 		return doneErr
