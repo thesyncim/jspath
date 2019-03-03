@@ -43,7 +43,7 @@ func main() {
 		defer f.Close()
 		jsPath := c.Args().Get(0)
 		if printKey {
-			streamChan := &ChannelStream{items: make(chan interface{}, 0), path: jsPath}
+			streamChan := &ItemStreamer{items: make(chan json.RawMessage, 0), path: jsPath}
 			dec := jspath.NewDecoder(f)
 			go dec.DecodeStreamItems(streamChan)
 			for {
@@ -52,7 +52,8 @@ func main() {
 					if !ok {
 						panic(ok)
 					}
-					log.Println(v)
+					os.Stdout.Write(v)
+					os.Stdout.Write(newLine)
 				case err := <-dec.Done():
 					if err != nil {
 						panic(err)
@@ -74,20 +75,16 @@ func main() {
 	}
 }
 
-type ChannelStream struct {
-	items chan interface{}
+type ItemStreamer struct {
+	items chan json.RawMessage
 	path  string
 }
 
-func (c *ChannelStream) Path() string {
+func (c *ItemStreamer) Path() string {
 	return c.path
 }
 
-func (c *ChannelStream) UnmarshalStream(key string, item json.RawMessage) error {
-	var u interface{}
-	if err := json.Unmarshal(item, &u); err != nil {
-		return err
-	}
-	c.items <- u
+func (c *ItemStreamer) UnmarshalStream(key string, item json.RawMessage) error {
+	c.items <- item
 	return nil
 }

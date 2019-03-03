@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"log"
 	"strings"
 
 	"github.com/gobwas/glob"
@@ -425,10 +424,8 @@ func (dec *PathDecoder) DecodeStreamItems(itemDecoders ...PathItemStreamer) (err
 	}
 	err = dec.decode(decoders...)
 	go func() {
-		log.Println("before closing")
 		dec.done <- err
 		close(dec.done)
-		log.Println("closed")
 	}()
 
 	return err
