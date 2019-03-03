@@ -74,7 +74,7 @@ func (bs BookStreamer) UnmarshalStream(key string, message json.RawMessage) erro
 type BicycleStreamer chan *Bicycle
 
 func (BicycleStreamer) MatchPath() string {
-	return "$.store.bicycle"
+	return "$.store.bicycle[*]"
 }
 
 func (bs BicycleStreamer) UnmarshalStream(key string, message json.RawMessage) error {
