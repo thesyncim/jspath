@@ -2,10 +2,10 @@ package main
 
 import (
 	"encoding/json"
-	"github.com/thesyncim/gojq"
 	"log"
 	"os"
 
+	"github.com/thesyncim/jspath"
 	"github.com/urfave/cli"
 )
 
@@ -13,6 +13,8 @@ var (
 	src      string
 	printKey bool
 )
+
+var newLine = []byte("\n")
 
 func main() {
 	app := cli.NewApp()
@@ -41,15 +43,25 @@ func main() {
 		defer f.Close()
 		jsPath := c.Args().Get(0)
 		if printKey {
-			return gojq.NewDecoder(f).DecodePathKey(jsPath, func(key string, message json.RawMessage) error {
-				_, err := os.Stdout.WriteString(key)
-				_, err = os.Stdout.WriteString("=>")
-				_, err = os.Stdout.Write(message)
-				_, err = os.Stdout.Write([]byte("\n"))
-				return err
-			})
+			streamChan := &ChannelStream{items: make(chan interface{}, 0), path: jsPath}
+			dec := jspath.NewDecoder(f)
+			go dec.DecodeStreamItems(streamChan)
+			for {
+				select {
+				case v, ok := <-streamChan.items:
+					if !ok {
+						panic(ok)
+					}
+					log.Println(v)
+				case err := <-dec.Done():
+					if err != nil {
+						panic(err)
+					}
+					return nil
+				}
+			}
 		}
-		return gojq.NewDecoder(f).DecodePath(jsPath, func(message json.RawMessage) error {
+		return jspath.NewDecoder(f).DecodeStream(jsPath, func(message json.RawMessage) error {
 			_, err := os.Stdout.Write(message)
 			_, err = os.Stdout.Write(newLine)
 			return err
@@ -62,4 +74,20 @@ func main() {
 	}
 }
 
-var newLine = []byte("\n")
+type ChannelStream struct {
+	items chan interface{}
+	path  string
+}
+
+func (c *ChannelStream) Path() string {
+	return c.path
+}
+
+func (c *ChannelStream) UnmarshalStream(key string, item json.RawMessage) error {
+	var u interface{}
+	if err := json.Unmarshal(item, &u); err != nil {
+		return err
+	}
+	c.items <- u
+	return nil
+}

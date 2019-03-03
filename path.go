@@ -1,4 +1,4 @@
-package gojq
+package jspath
 
 import (
 	"bytes"

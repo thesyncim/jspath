@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package gojq
+package jspath
 
 // JSON value parser state machine.
 // Just about at the limit of what is reasonable to write by hand.
@@ -62,7 +62,7 @@ type scanner struct {
 	// Error that happened, if any.
 	syntaxErr SyntaxError
 
-	// total bytes consumed, updated by decoderWithoutKey.Decode
+	// total bytes consumed, updated by decoderWithoutKey.UnmarshalStream
 	bytes int64
 }
 

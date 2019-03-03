@@ -1,4 +1,4 @@
-package gojq
+package jspath
 
 import (
 	"encoding/json"
@@ -131,7 +131,7 @@ func TestDecodePath(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewDecoder(strings.NewReader(testdata))
 			var results []json.RawMessage
-			err := s.DecodePath(tc.path, func(message json.RawMessage) error {
+			err := s.DecodeStream(tc.path, func(message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
@@ -266,7 +266,7 @@ func TestDecodePathMultiple(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewDecoder(strings.NewReader(testdataMultiple))
 			var results []json.RawMessage
-			err := s.DecodePath(tc.path, func(message json.RawMessage) error {
+			err := s.DecodeStream(tc.path, func(message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
@@ -356,7 +356,7 @@ func TestDecodePathMultipleRegex(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewDecoder(strings.NewReader(testdataMultiple))
 			var results []json.RawMessage
-			err := s.DecodePath(tc.path, func(message json.RawMessage) error {
+			err := s.DecodeStream(tc.path, func(message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
@@ -402,7 +402,7 @@ func TestDecodeSimpleTypes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewDecoder(strings.NewReader(tc.input))
 			var results []json.RawMessage
-			err := s.DecodePath(tc.path, func(message json.RawMessage) error {
+			err := s.DecodeStream(tc.path, func(message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)

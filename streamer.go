@@ -1,15 +1,16 @@
-package gojq
+package jspath
 
 import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"strings"
 
 	"github.com/gobwas/glob"
 )
 
-// A PathDecoder reads and decodes JSON values from an input stream at specified path.
+// A PathDecoder reads and decodes JSON values from an input stream at specified jsonp ath.
 type PathDecoder struct {
 	r       io.Reader
 	buf     []byte
@@ -24,29 +25,33 @@ type PathDecoder struct {
 	tokenState int
 	tokenStack []int
 
+	done chan error
 	path *PathBuilder
 }
 
-type matcher func(d *PathBuilder, jsPath string) bool
+type PathItemStreamer interface {
+	Path() string
+	UnmarshalStream(key string, message json.RawMessage) error
+}
+
+type matcher func(curPath, jsPath string) (bool, string)
 
 // NewDecoder returns a new decoderWithoutKey that reads from r.
 //
 // The decoderWithoutKey introduces its own buffering and may
 // read data from r beyond the JSON values requested.
 func NewDecoder(r io.Reader) *PathDecoder {
-	return &PathDecoder{r: r, path: NewPathBuilder()}
+	return &PathDecoder{r: r, path: NewPathBuilder(), done: make(chan error, 0)}
 }
 
-// UseNumber causes the PathDecoder to unmarshal a number into an interface{} as a
-// Number instead of as a float64.
-func (dec *PathDecoder) UseNumber() { dec.useNumber = true }
+func (dec *PathDecoder) Done() <-chan error { return dec.done }
 
 // DisallowUnknownFields causes the PathDecoder to return an error when the destination
 // is a struct and the input contains object keys which do not match any
 // non-ignored, exported fields in the destination.
 func (dec *PathDecoder) DisallowUnknownFields() { dec.disallowUnknownFields = true }
 
-// Decode reads the next JSON-encoded value from its
+// UnmarshalStream reads the next JSON-encoded value from its
 // input and stores it in the value pointed to by v.
 //
 // See the documentation for Unmarshal for details about
@@ -119,7 +124,7 @@ func (dec *PathDecoder) DecodeBytes() ([]byte, error) {
 }
 
 // Buffered returns a reader of the data remaining in the PathDecoder's
-// buffer. The reader is valid until the next call to Decode.
+// buffer. The reader is valid until the next call to UnmarshalStream.
 func (dec *PathDecoder) Buffered() io.Reader {
 	return bytes.NewReader(dec.buf[dec.scanp:])
 }
@@ -237,7 +242,7 @@ const (
 // advance tokenstate from a separator state to a value state
 func (dec *PathDecoder) tokenPrepareForDecode() error {
 	// Note: Not calling Peek before switch, to avoid
-	// putting Peek into the standard Decode path.
+	// putting Peek into the standard UnmarshalStream path.
 	// Peek is only called when using the Token API.
 	switch dec.tokenState {
 	case tokenArrayComma:
@@ -398,39 +403,61 @@ type RawDecoder func(message json.RawMessage) error
 
 type RawDecoderKey func(key string, message json.RawMessage) error
 
-func (dec *PathDecoder) DecodePath(path string, decoder RawDecoder) (err error) {
+func (dec *PathDecoder) DecodeStream(path string, decoder RawDecoder) (err error) {
 	matcher, err := compilePath(path)
 	if err != nil {
 		return err
 	}
-	return dec.decodePath(path, decoderWithoutKey(decoder), matcher)
+	err = dec.decode(decodeMatcher{decoder: decoderWithoutKey{dec: decoder, jspath: path}, matcher: matcher})
+	dec.done <- err
+	close(dec.done)
+	return err
 }
 
-func (dec *PathDecoder) DecodePathKey(path string, decoder RawDecoderKey) (err error) {
-	matcher, err := compilePath(path)
-	if err != nil {
-		return err
+func (dec *PathDecoder) DecodeStreamItems(itemDecoders ...PathItemStreamer) (err error) {
+	var decoders []decodeMatcher
+	for i := range itemDecoders {
+		matcher, err := compilePath(itemDecoders[i].Path())
+		if err != nil {
+			return err
+		}
+		decoders = append(decoders, decodeMatcher{decoder: itemDecoders[i], matcher: matcher})
 	}
-	return dec.decodePath(path, decoderWithKey(decoder), matcher)
+	err = dec.decode(decoders...)
+	go func() {
+		log.Println("before closing")
+		dec.done <- err
+		close(dec.done)
+		log.Println("closed")
+	}()
+
+	return err
 }
 
 type Decoder interface {
-	Decode(key string, message json.RawMessage) error
+	UnmarshalStream(key string, message json.RawMessage) error
 }
 
-type decoderWithoutKey func(message json.RawMessage) error
+type decoderWithoutKey struct {
+	dec    func(message json.RawMessage) error
+	jspath string
+}
 
-func (d decoderWithoutKey) Decode(key string, message json.RawMessage) error {
-	return d(message)
+func (d decoderWithoutKey) Path() string {
+	return d.jspath
+}
+
+func (d decoderWithoutKey) UnmarshalStream(key string, message json.RawMessage) error {
+	return d.dec(message)
 }
 
 type decoderWithKey func(key string, message json.RawMessage) error
 
-func (d decoderWithKey) Decode(key string, message json.RawMessage) error {
+func (d decoderWithKey) UnmarshalStream(key string, message json.RawMessage) error {
 	return d(key, message)
 }
 
-func (dec *PathDecoder) decodePath(jsPath string, decodeFunc Decoder, matchPath matcher) (err error) {
+func (dec *PathDecoder) decode(matchers ...decodeMatcher) (err error) {
 	for {
 		c, err := dec.Peek()
 		if err != nil {
@@ -445,7 +472,8 @@ func (dec *PathDecoder) decodePath(jsPath string, decodeFunc Decoder, matchPath 
 			if !dec.tokenValueAllowed() {
 				return dec.tokenError2(c)
 			}
-			match := matchPath(dec.path, jsPath)
+			curPath := dec.path.Path()
+			match, itemDecoder := dmatcher(matchers).match(curPath)
 			dec.scanp++
 			dec.tokenStack = append(dec.tokenStack, dec.tokenState)
 			dec.tokenState = tokenArrayStart
@@ -460,7 +488,7 @@ func (dec *PathDecoder) decodePath(jsPath string, decodeFunc Decoder, matchPath 
 						if err != nil {
 							return err
 						}
-						if err := decodeFunc.Decode(dec.path.Path(), bytes); err != nil {
+						if err := itemDecoder.decoder.UnmarshalStream(curPath, bytes); err != nil {
 							return err
 						}
 					}
@@ -482,14 +510,15 @@ func (dec *PathDecoder) decodePath(jsPath string, decodeFunc Decoder, matchPath 
 			if !dec.tokenValueAllowed() {
 				return dec.tokenError2(c)
 			}
-			match := matchPath(dec.path, jsPath)
+			curPath := dec.path.Path()
+			match, itemDecoder := dmatcher(matchers).match(curPath)
 			if dec.More() {
 				if match {
 					bytes, err := dec.DecodeBytes()
 					if err != nil {
 						return err
 					}
-					if err := decodeFunc.Decode(dec.path.Path(), bytes); err != nil {
+					if err := itemDecoder.decoder.UnmarshalStream(curPath, bytes); err != nil {
 						return err
 					}
 					continue
@@ -557,8 +586,9 @@ func (dec *PathDecoder) decodePath(jsPath string, decodeFunc Decoder, matchPath 
 			if bytes, err := dec.DecodeBytes(); err != nil {
 				return err
 			} else {
-				if matchPath(dec.path, jsPath) {
-					if err := decodeFunc.Decode(dec.path.Path(), bytes); err != nil {
+				curPath := dec.path.Path()
+				if match, itemDecoder := dmatcher(matchers).match(curPath); match {
+					if err := itemDecoder.decoder.UnmarshalStream(curPath, bytes); err != nil {
 						return err
 					}
 				}
@@ -645,12 +675,12 @@ func compilePath(jsPath string) (matcher, error) {
 		if err != nil {
 			return nil, err
 		}
-		return func(d *PathBuilder, jsPath string) bool {
-			return re.Match(d.Path())
+		return func(curPath string, jsPath string) (bool, string) {
+			return re.Match(curPath), curPath
 		}, nil
 	}
-	return func(d *PathBuilder, jsPath string) bool {
-		return d.MatchString(jsPath)
+	return func(curPath string, jsPath string) (bool, string) {
+		return curPath == jsPath, curPath
 	}, nil
 }
 
@@ -658,4 +688,28 @@ func escapeGlob(jsPath string) string {
 	s := strings.Replace(jsPath, "[", "\\[", -1)
 	s = strings.Replace(s, "]", "\\]", -1)
 	return s
+}
+
+type decodeMatcher struct {
+	decoder PathItemStreamer
+	matcher matcher
+}
+
+type dmatcher []decodeMatcher
+
+func (matchers dmatcher) match(curPath string) (bool, *decodeMatcher) {
+	var found = -1
+	for i := range matchers {
+		match, _ := matchers[i].matcher(curPath, matchers[i].decoder.Path())
+		if match {
+			if found != -1 {
+				panic(matchers[found].decoder.Path() + " conflicts with" + matchers[i].decoder.Path())
+			}
+			found = i
+		}
+	}
+	if found == -1 {
+		return false, nil
+	}
+	return true, &matchers[found]
 }
