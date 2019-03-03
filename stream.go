@@ -59,7 +59,6 @@ func (dec *StreamDecoder) Decode(itemDecoders ...UnmarshalerStream) (err error) 
 
 	select {
 	case <-dec.context.Done():
-		//close(dec.done)
 		return dec.context.Err()
 	case doneErr := <-dec.Done():
 		return doneErr
@@ -281,6 +280,11 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 //we might change this behaviour
 func (dec *StreamDecoder) decodeAll(decoder decoder, curPath string) error {
 	for {
+		select {
+		case <-dec.context.Done():
+			return dec.context.Err()
+		default:
+		}
 		if !dec.more() {
 			break
 		}
