@@ -2,7 +2,6 @@ package jspath
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -489,6 +488,7 @@ func TestDecodeSimpleTypes(t *testing.T) {
 	}
 }
 
+/*
 func TestBigFile(t *testing.T) {
 	f, err := os.Open("/Users/stream/Downloads/citylots.json")
 	require.NoError(t, err)
@@ -497,4 +497,4 @@ func TestBigFile(t *testing.T) {
 		return nil
 	}))
 	require.NoError(t, err)
-}
+}*/
