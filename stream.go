@@ -65,11 +65,12 @@ func (dec *StreamDecoder) DecodePath(jsPath string, onPath func(key string, mess
 		return err
 	}
 	go dec.decode(decoder{unmarshaler: NewRawStreamUnmarshaler(jsPath, onPath), matcher: matcher})
-
 	return <-dec.Done()
 }
 
-func (dec *StreamDecoder) Done() <-chan error { return dec.done }
+func (dec *StreamDecoder) Done() <-chan error {
+	return dec.done
+}
 
 // A Token holds a value of one of these types:
 //
@@ -263,30 +264,6 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 	}
 	dec.done <- nil
 	return
-
-}
-
-//by default when a selector match is type [] we stream all the items
-//we might change this behaviour
-func (dec *StreamDecoder) decodeAll(decoder decoder, curPath string) error {
-	for {
-		select {
-		case <-dec.context.Done():
-			return dec.context.Err()
-		default:
-		}
-		if !dec.more() {
-			break
-		}
-		bytes, err := dec.decodeBytes()
-		if err != nil {
-			return err
-		}
-		if err := decoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (dec *StreamDecoder) decodeBytes() ([]byte, error) {
