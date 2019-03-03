@@ -205,6 +205,7 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 						dec.done <- err
 						return
 					}
+					dec.tokenValueEnd()
 					continue
 				}
 			}

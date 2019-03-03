@@ -467,6 +467,14 @@ func TestDecodeSimpleTypes(t *testing.T) {
 				`67`, "68", "69",
 			},
 		},
+		{
+			name:  "mixed",
+			path:  "$.",
+			input: `"a" 3 ["s"] {"j":"j"}`,
+			want: []string{
+				`"a"`, "3", `["s"]`, `{"j":"j"}`,
+			},
+		},
 	}
 
 	for _, tc := range testcases {
