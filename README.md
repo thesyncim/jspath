@@ -1,1 +1,1 @@
-# jspath Stream Decoder
+# JSPath Stream Decoder
