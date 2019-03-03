@@ -291,6 +291,9 @@ func (dec *StreamDecoder) decode(matchers ...decodeMatcher) {
 						}
 						bytes, err := dec.decodeBytes()
 						if err != nil {
+							if err == io.EOF {
+								break
+							}
 							dec.done <- err
 							return
 						}
