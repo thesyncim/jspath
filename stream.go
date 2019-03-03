@@ -29,10 +29,10 @@ type StreamDecoder struct {
 
 type UnmarshalerStream interface {
 	MatchPath() string
+	//UnmarshalStream is called once the patch is matched
+	//the content of the message is only valid until the function return
 	UnmarshalStream(key string, message json.RawMessage) error
 }
-
-type matcher func(curPath, jsPath string) (bool, string)
 
 // NewStreamDecoder returns a new StreamDecoder that reads from r.
 //
@@ -47,39 +47,6 @@ func (dec *StreamDecoder) WithContext(ctx context.Context) {
 }
 
 func (dec *StreamDecoder) Done() <-chan error { return dec.done }
-
-func (dec *StreamDecoder) decodeValue(v interface{}) error {
-	if dec.err != nil {
-		return dec.err
-	}
-
-	if err := dec.tokenPrepareForDecode(); err != nil {
-		return err
-	}
-
-	if !dec.tokenValueAllowed() {
-		return &SyntaxError{msg: "not at beginning of value", Offset: dec.offset()}
-	}
-
-	// Read whole value into buffer.
-	n, err := dec.readValue()
-	if err != nil {
-		return err
-	}
-
-	rdr := dec.buf[dec.scanp : dec.scanp+n]
-	dec.scanp += n
-
-	// Don't save err from unmarshal into dec.err:
-	// the connection is still usable since we read a complete JSON
-	// object from it before the error happened.
-	err = json.Unmarshal(rdr, v)
-
-	// fixup token streaming state
-	dec.tokenValueEnd()
-
-	return err
-}
 
 func (dec *StreamDecoder) decodeBytes() ([]byte, error) {
 	if dec.err != nil {
@@ -101,18 +68,12 @@ func (dec *StreamDecoder) decodeBytes() ([]byte, error) {
 	}
 
 	out := dec.buf[dec.scanp : dec.scanp+n]
-
 	dec.scanp += n
-
-	// Don't save err from unmarshal into dec.err:
-	// the connection is still usable since we read a complete JSON
-	// object from it before the error happened.
-	//err = json.Unmarshal(rdr, v)
 
 	// fixup token streaming state
 	dec.tokenValueEnd()
 
-	return out, err
+	return out, nil
 }
 
 // readValue reads a JSON value into dec.buf.
@@ -211,7 +172,6 @@ func nonSpace(b []byte) bool {
 //	string, for JSON string literals
 //	nil, for JSON null
 //
-type Token interface{}
 
 const (
 	tokenTopValue = iota
@@ -275,7 +235,7 @@ func (dec *StreamDecoder) tokenValueEnd() {
 func (dec *StreamDecoder) Decode(itemDecoders ...UnmarshalerStream) (err error) {
 	var decoders []decodeMatcher
 	for i := range itemDecoders {
-		matcher, err := compilePath(itemDecoders[i].MatchPath())
+		matcher, err := dec.compilePath(itemDecoders[i].MatchPath())
 		if err != nil {
 			return err
 		}
@@ -285,6 +245,7 @@ func (dec *StreamDecoder) Decode(itemDecoders ...UnmarshalerStream) (err error) 
 
 	select {
 	case <-dec.context.Done():
+		close(dec.done)
 		return dec.context.Err()
 	case doneErr := <-dec.Done():
 		return doneErr
@@ -297,6 +258,11 @@ func (dec *StreamDecoder) decode(matchers ...decodeMatcher) {
 		close(dec.done)
 	}()
 	for {
+		select {
+		case <-dec.context.Done():
+			return
+		default:
+		}
 		c, err := dec.peek()
 		if err != nil {
 			if err == io.EOF {
@@ -312,7 +278,7 @@ func (dec *StreamDecoder) decode(matchers ...decodeMatcher) {
 				return
 			}
 			curPath := dec.path.Path()
-			match, itemDecoder := dmatcher(matchers).match(curPath)
+			match, itemDecoder := matcher(matchers).match(curPath)
 			dec.scanp++
 			dec.tokenStack = append(dec.tokenStack, dec.tokenState)
 			dec.tokenState = tokenArrayStart
@@ -354,7 +320,7 @@ func (dec *StreamDecoder) decode(matchers ...decodeMatcher) {
 				return
 			}
 			curPath := dec.path.Path()
-			match, itemDecoder := dmatcher(matchers).match(curPath)
+			match, itemDecoder := matcher(matchers).match(curPath)
 			if dec.more() {
 				if match {
 					if curPath == "$" {
@@ -462,7 +428,7 @@ func (dec *StreamDecoder) decode(matchers ...decodeMatcher) {
 				return
 			} else {
 				curPath := dec.path.Path()
-				if match, itemDecoder := dmatcher(matchers).match(curPath); match {
+				if match, itemDecoder := matcher(matchers).match(curPath); match {
 					if err := itemDecoder.decoder.UnmarshalStream(curPath, bytes); err != nil {
 						dec.done <- err
 						return
@@ -525,7 +491,7 @@ func (dec *StreamDecoder) offset() int64 {
 	return dec.scanned + int64(dec.scanp)
 }
 
-func compilePath(jsPath string) (matcher, error) {
+func (dec *StreamDecoder) compilePath(jsPath string) (func(curPath, jsPath string) (bool, string), error) {
 	if i := strings.IndexByte(jsPath, '*'); i != -1 {
 		s := escapeGlob(jsPath)
 		re, err := glob.Compile(s)
@@ -537,6 +503,7 @@ func compilePath(jsPath string) (matcher, error) {
 		}, nil
 	}
 	return func(curPath string, jsPath string) (bool, string) {
+		//exception for root path
 		if curPath == "$" && jsPath == "$." {
 			return true, jsPath
 		}
@@ -552,12 +519,12 @@ func escapeGlob(jsPath string) string {
 
 type decodeMatcher struct {
 	decoder UnmarshalerStream
-	matcher matcher
+	matcher func(curPath, jsPath string) (bool, string)
 }
 
-type dmatcher []decodeMatcher
+type matcher []decodeMatcher
 
-func (matchers dmatcher) match(curPath string) (bool, *decodeMatcher) {
+func (matchers matcher) match(curPath string) (bool, *decodeMatcher) {
 	var found = -1
 	for i := range matchers {
 		match, _ := matchers[i].matcher(curPath, matchers[i].decoder.MatchPath())
@@ -575,16 +542,16 @@ func (matchers dmatcher) match(curPath string) (bool, *decodeMatcher) {
 }
 
 func NewRawStreamUnmarshaler(matchPath string, onMatch func(key string, message json.RawMessage) error) UnmarshalerStream {
-	return &RawStreamUnmarshaler{path: matchPath, onMatch: onMatch}
+	return &RawStreamUnmarshaler{matchPath: matchPath, onMatch: onMatch}
 }
 
 type RawStreamUnmarshaler struct {
-	path    string
-	onMatch func(key string, message json.RawMessage) error
+	matchPath string
+	onMatch   func(key string, message json.RawMessage) error
 }
 
 func (r *RawStreamUnmarshaler) MatchPath() string {
-	return r.path
+	return r.matchPath
 }
 
 func (r *RawStreamUnmarshaler) UnmarshalStream(key string, message json.RawMessage) error {

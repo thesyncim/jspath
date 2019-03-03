@@ -2,6 +2,7 @@ package jspath
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -486,4 +487,14 @@ func TestDecodeSimpleTypes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBigFile(t *testing.T) {
+	f, err := os.Open("/Users/stream/Downloads/citylots.json")
+	require.NoError(t, err)
+	s := NewStreamDecoder(f)
+	err = s.Decode(NewRawStreamUnmarshaler("$.features[*]", func(key string, message json.RawMessage) error {
+		return nil
+	}))
+	require.NoError(t, err)
 }
