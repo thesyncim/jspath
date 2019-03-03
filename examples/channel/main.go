@@ -62,7 +62,7 @@ func (BookStreamer) AtPath() string {
 	return "$.store.book[*]"
 }
 
-func (bs BookStreamer) UnmarshalStream(key string, message json.RawMessage) error {
+func (bs BookStreamer) UnmarshalStream(key []byte, message json.RawMessage) error {
 	var b Book
 	if err := json.Unmarshal(message, &b); err != nil {
 		return err
@@ -77,7 +77,7 @@ func (BicycleStreamer) AtPath() string {
 	return "$.store.bicycle"
 }
 
-func (bs BicycleStreamer) UnmarshalStream(key string, message json.RawMessage) error {
+func (bs BicycleStreamer) UnmarshalStream(key []byte, message json.RawMessage) error {
 	var b Bicycle
 	if err := json.Unmarshal(message, &b); err != nil {
 		return err

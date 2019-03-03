@@ -126,7 +126,7 @@ func TestDecodePath(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewStreamDecoder(strings.NewReader(testdata))
 			var results []json.RawMessage
-			err := s.DecodePath(tc.path, func(key string, message json.RawMessage) error {
+			err := s.DecodePath(tc.path, func(key []byte, message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
@@ -266,7 +266,7 @@ func TestDecodePathMultiple(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewStreamDecoder(strings.NewReader(testdataMultiple))
 			var results []json.RawMessage
-			err := s.Decode(NewRawStreamUnmarshaler(tc.path, func(key string, message json.RawMessage) error {
+			err := s.Decode(NewRawStreamUnmarshaler(tc.path, func(key []byte, message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
@@ -356,7 +356,7 @@ func TestDecodePathMultipleRegex(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewStreamDecoder(strings.NewReader(testdataMultiple))
 			var results []json.RawMessage
-			err := s.Decode(NewRawStreamUnmarshaler(tc.path, func(key string, message json.RawMessage) error {
+			err := s.Decode(NewRawStreamUnmarshaler(tc.path, func(key []byte, message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
@@ -427,7 +427,7 @@ func TestHandleRoot(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewStreamDecoder(strings.NewReader(tc.input))
 			var results []json.RawMessage
-			err := s.Decode(NewRawStreamUnmarshaler(tc.path, func(key string, message json.RawMessage) error {
+			err := s.Decode(NewRawStreamUnmarshaler(tc.path, func(key []byte, message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
@@ -487,7 +487,7 @@ func TestDecodeSimpleTypesAndReset(t *testing.T) {
 				dec.Reset(strings.NewReader(tc.input))
 			}
 			var results []json.RawMessage
-			err := dec.Decode(NewRawStreamUnmarshaler(tc.path, func(key string, message json.RawMessage) error {
+			err := dec.Decode(NewRawStreamUnmarshaler(tc.path, func(key []byte, message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
@@ -502,14 +502,3 @@ func TestDecodeSimpleTypesAndReset(t *testing.T) {
 		})
 	}
 }
-
-/*
-func TestBigFile(t *testing.T) {
-	f, err := os.Open("/Users/stream/Downloads/citylots.json")
-	require.NoError(t, err)
-	s := NewStreamDecoder(f)
-	err = s.Decode(NewRawStreamUnmarshaler("$.features[*]", func(key string, message json.RawMessage) error {
-		return nil
-	}))
-	require.NoError(t, err)
-}*/

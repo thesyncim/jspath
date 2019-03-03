@@ -26,7 +26,7 @@ type UnmarshalerStream interface {
 	AtPath() string
 	//UnmarshalStream is called once the patch is matched
 	//the content of the message is only valid until the function return
-	UnmarshalStream(key string, message json.RawMessage) error
+	UnmarshalStream(key []byte, message json.RawMessage) error
 }
 
 // A StreamDecoder reads and decodes JSON values from an input stream at specified json path.
@@ -74,7 +74,7 @@ func (dec *StreamDecoder) Decode(itemDecoders ...UnmarshalerStream) (err error) 
 	return dec.err
 }
 
-func (dec *StreamDecoder) DecodePath(jsPath string, onPath func(key string, message json.RawMessage) error) (err error) {
+func (dec *StreamDecoder) DecodePath(jsPath string, onPath func(key []byte, message json.RawMessage) error) (err error) {
 	matcher, err := dec.compilePath(jsPath)
 	if err != nil {
 		return err
@@ -145,9 +145,9 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 				return
 			}
 			if dec.more() {
-				curPath := dec.path.Path()
+				curPath := dec.path.PathBytes()
 				dec.path.StartArray()
-				match, itemDecoder := matcher(decoders).match(curPath)
+				match, itemDecoder := matcher(decoders).match(BytesToString(curPath))
 				if match {
 					bytes, err := dec.decodeBytes()
 					if err != nil {
@@ -190,8 +190,8 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 				return
 			}
 			if dec.more() {
-				curPath := dec.path.Path()
-				match, itemDecoder := matcher(decoders).match(curPath)
+				curPath := dec.path.PathBytes()
+				match, itemDecoder := matcher(decoders).match(BytesToString(curPath))
 				if match {
 					bytes, err := dec.decodeBytes()
 					if err != nil {
@@ -278,8 +278,8 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 				dec.err = err
 				return
 			} else {
-				curPath := dec.path.Path()
-				if match, itemDecoder := matcher(decoders).match(curPath); match {
+				curPath := dec.path.PathBytes()
+				if match, itemDecoder := matcher(decoders).match(BytesToString(curPath)); match {
 					if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
 						dec.err = err
 						return
@@ -546,19 +546,19 @@ func (matchers matcher) match(curPath string) (bool, decoder) {
 	return false, decoder{}
 }
 
-func NewRawStreamUnmarshaler(matchPath string, onMatch func(key string, message json.RawMessage) error) UnmarshalerStream {
+func NewRawStreamUnmarshaler(matchPath string, onMatch func(key []byte, message json.RawMessage) error) UnmarshalerStream {
 	return &RawStreamUnmarshaler{matchPath: matchPath, onMatch: onMatch}
 }
 
 type RawStreamUnmarshaler struct {
 	matchPath string
-	onMatch   func(key string, message json.RawMessage) error
+	onMatch   func(key []byte, message json.RawMessage) error
 }
 
 func (r *RawStreamUnmarshaler) AtPath() string {
 	return r.matchPath
 }
 
-func (r *RawStreamUnmarshaler) UnmarshalStream(key string, message json.RawMessage) error {
+func (r *RawStreamUnmarshaler) UnmarshalStream(key []byte, message json.RawMessage) error {
 	return r.onMatch(key, message)
 }

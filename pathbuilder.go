@@ -95,6 +95,16 @@ func (p *pathBuilder) Path() string {
 	return *(*string)(unsafe.Pointer(&s))
 }
 
+func (p *pathBuilder) PathBytes() []byte {
+	p.pathBuf.Reset()
+	for i := range p.Segments {
+		if p.Segments[i].Len() != 0 {
+			p.pathBuf.Write(p.Segments[i].Bytes())
+		}
+	}
+	return p.pathBuf.Bytes()
+}
+
 func BytesToString(bytes []byte) (s string) {
 	slice := (*reflect.SliceHeader)(unsafe.Pointer(&bytes))
 	str := (*reflect.StringHeader)(unsafe.Pointer(&s))
