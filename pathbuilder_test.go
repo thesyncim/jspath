@@ -7,11 +7,11 @@ import (
 )
 
 func TestPath(t *testing.T) {
-	path := NewPathBuilder()
+	path := newPathBuilder()
 	path.StartArray()
 	log.Println(path.Path())
 
-	path = NewPathBuilder()
+	path = newPathBuilder()
 	path.StartObject()
 	path.SetObjectKey([]byte("key"))
 	path.StartArray()
@@ -25,7 +25,7 @@ func TestPath(t *testing.T) {
 
 func BenchmarkNewPathBuilder(b *testing.B) {
 
-	path := NewPathBuilder()
+	path := newPathBuilder()
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {

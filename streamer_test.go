@@ -371,6 +371,77 @@ func TestDecodePathMultipleRegex(t *testing.T) {
 	}
 }
 
+func TestHandleRoot(t *testing.T) {
+	var testcases = []struct {
+		name  string
+		path  string
+		input string
+		want  []string
+	}{
+		{
+			name:  "stream array match",
+			path:  "$.",
+			input: `["abc"]`,
+			want: []string{
+				`"abc"`,
+			},
+		},
+		{
+			name:  "stream object match",
+			path:  "$.",
+			input: `{"abc":{}}`,
+			want: []string{
+				`{"abc":{}}`,
+			},
+		},
+		{
+			name:  "stream multiple object match",
+			path:  "$.",
+			input: `{"abc":{}}{"abc":{}}`,
+			want: []string{
+				`{"abc":{}}`,
+				`{"abc":{}}`,
+			},
+		},
+		{
+			name:  "match stream root level strings",
+			path:  "$.",
+			input: `["abc"]["abc"]`,
+			want: []string{
+				`"abc"`,
+				`"abc"`,
+			},
+		},
+		{
+			name:  "match stream root level strings",
+			path:  "$.",
+			input: `"asd" "sds"`,
+			want: []string{
+				`"asd"`,
+				`"sds"`,
+			},
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewDecoder(strings.NewReader(tc.input))
+			var results []json.RawMessage
+			err := s.DecodeStream(tc.path, func(message json.RawMessage) error {
+				result := make(json.RawMessage, len(message))
+				copy(result, message)
+				results = append(results, result)
+				return nil
+			})
+			require.NoError(t, err)
+			require.Equal(t, len(tc.want), len(results))
+			for i := range tc.want {
+				require.JSONEq(t, tc.want[i], string(results[i]))
+			}
+		})
+	}
+}
+
 func TestDecodeSimpleTypes(t *testing.T) {
 	var testcases = []struct {
 		name  string

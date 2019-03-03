@@ -80,7 +80,7 @@ type ItemStreamer struct {
 	path  string
 }
 
-func (c *ItemStreamer) Path() string {
+func (c *ItemStreamer) MatchPath() string {
 	return c.path
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"strings"
 
 	"github.com/gobwas/glob"
@@ -25,11 +26,11 @@ type PathDecoder struct {
 	tokenStack []int
 
 	done chan error
-	path *PathBuilder
+	path *pathBuilder
 }
 
 type PathItemStreamer interface {
-	Path() string
+	MatchPath() string
 	UnmarshalStream(key string, message json.RawMessage) error
 }
 
@@ -40,7 +41,7 @@ type matcher func(curPath, jsPath string) (bool, string)
 // The decoderWithoutKey introduces its own buffering and may
 // read data from r beyond the JSON values requested.
 func NewDecoder(r io.Reader) *PathDecoder {
-	return &PathDecoder{r: r, path: NewPathBuilder(), done: make(chan error, 0)}
+	return &PathDecoder{r: r, path: newPathBuilder(), done: make(chan error, 0)}
 }
 
 func (dec *PathDecoder) Done() <-chan error { return dec.done }
@@ -408,15 +409,17 @@ func (dec *PathDecoder) DecodeStream(path string, decoder RawDecoder) (err error
 		return err
 	}
 	err = dec.decode(decodeMatcher{decoder: decoderWithoutKey{dec: decoder, jspath: path}, matcher: matcher})
-	dec.done <- err
-	close(dec.done)
+	go func() {
+		dec.done <- err
+		close(dec.done)
+	}()
 	return err
 }
 
 func (dec *PathDecoder) DecodeStreamItems(itemDecoders ...PathItemStreamer) (err error) {
 	var decoders []decodeMatcher
 	for i := range itemDecoders {
-		matcher, err := compilePath(itemDecoders[i].Path())
+		matcher, err := compilePath(itemDecoders[i].MatchPath())
 		if err != nil {
 			return err
 		}
@@ -440,18 +443,12 @@ type decoderWithoutKey struct {
 	jspath string
 }
 
-func (d decoderWithoutKey) Path() string {
+func (d decoderWithoutKey) MatchPath() string {
 	return d.jspath
 }
 
 func (d decoderWithoutKey) UnmarshalStream(key string, message json.RawMessage) error {
 	return d.dec(message)
-}
-
-type decoderWithKey func(key string, message json.RawMessage) error
-
-func (d decoderWithKey) UnmarshalStream(key string, message json.RawMessage) error {
-	return d(key, message)
 }
 
 func (dec *PathDecoder) decode(matchers ...decodeMatcher) (err error) {
@@ -463,7 +460,7 @@ func (dec *PathDecoder) decode(matchers ...decodeMatcher) (err error) {
 			}
 			return err
 		}
-
+		log.Println(string(c), dec.path.Path())
 		switch c {
 		case '[':
 			if !dec.tokenValueAllowed() {
@@ -511,10 +508,33 @@ func (dec *PathDecoder) decode(matchers ...decodeMatcher) (err error) {
 			match, itemDecoder := dmatcher(matchers).match(curPath)
 			if dec.More() {
 				if match {
+					if curPath == "$" {
+						for {
+							if !dec.More() {
+								break
+
+							}
+							bytes, err := dec.DecodeBytes()
+							if err != nil {
+								if err == io.EOF {
+									break
+								}
+								return err
+							}
+							log.Println(bytes)
+							if err := itemDecoder.decoder.UnmarshalStream(curPath, bytes); err != nil {
+								return err
+							}
+						}
+					}
 					bytes, err := dec.DecodeBytes()
 					if err != nil {
+						if err == io.EOF {
+							break
+						}
 						return err
 					}
+					log.Println(bytes)
 					if err := itemDecoder.decoder.UnmarshalStream(curPath, bytes); err != nil {
 						return err
 					}
@@ -611,8 +631,7 @@ func (dec *PathDecoder) tokenError(c byte) (Token, error) {
 	case tokenObjectComma:
 		context = " after object key:value pair"
 	}
-	_ = context
-	return nil, &SyntaxError{msg: "invalid character ", Offset: dec.offset()} //+ quoteChar(c) + " " + context, dec.offset()}
+	return nil, &SyntaxError{msg: "invalid character " + quoteChar(c) + " " + context, Offset: dec.offset()}
 }
 
 func (dec *PathDecoder) tokenError2(c byte) error {
@@ -631,8 +650,7 @@ func (dec *PathDecoder) tokenError2(c byte) error {
 	case tokenObjectComma:
 		context = " after object key:value pair"
 	}
-	_ = context
-	return &SyntaxError{msg: "invalid character ", Offset: dec.offset()} //+ quoteChar(c) + " " + context, dec.offset()}
+	return &SyntaxError{msg: "invalid character " + quoteChar(c) + " " + context, Offset: dec.offset()}
 }
 
 // More reports whether there is another element in the
@@ -677,6 +695,9 @@ func compilePath(jsPath string) (matcher, error) {
 		}, nil
 	}
 	return func(curPath string, jsPath string) (bool, string) {
+		if curPath == "$" && jsPath == "$." {
+			return true, jsPath
+		}
 		return curPath == jsPath, curPath
 	}, nil
 }
@@ -697,10 +718,10 @@ type dmatcher []decodeMatcher
 func (matchers dmatcher) match(curPath string) (bool, *decodeMatcher) {
 	var found = -1
 	for i := range matchers {
-		match, _ := matchers[i].matcher(curPath, matchers[i].decoder.Path())
+		match, _ := matchers[i].matcher(curPath, matchers[i].decoder.MatchPath())
 		if match {
 			if found != -1 {
-				panic(matchers[found].decoder.Path() + " conflicts with" + matchers[i].decoder.Path())
+				panic(matchers[found].decoder.MatchPath() + " conflicts with" + matchers[i].decoder.MatchPath())
 			}
 			found = i
 		}

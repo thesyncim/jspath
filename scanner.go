@@ -14,6 +14,7 @@ package jspath
 // before diving into the scanner itself.
 
 import (
+	"log"
 	"strconv"
 )
 
@@ -548,6 +549,8 @@ func (s *scanner) error(c byte, context string) int {
 	s.syntaxErr.context = context
 	s.syntaxErr.quote = c
 	s.err = &s.syntaxErr
+	log.Println(s.syntaxErr)
+	log.Println(string(byte(93)))
 	return scanError
 }
 
