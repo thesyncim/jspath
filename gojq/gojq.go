@@ -42,16 +42,19 @@ func main() {
 			return err
 		}
 		defer f.Close()
-		jsPath := c.Args().Get(0)
-		return jspath.NewStreamDecoder(f).Decode(jspath.NewRawStreamUnmarshaler(jsPath, func(key string, message json.RawMessage) error {
-			if printKey {
-				os.Stdout.WriteString(key)
-				os.Stdout.Write(space)
-			}
-			_, err := os.Stdout.Write(message)
-			_, err = os.Stdout.Write(newLine)
-			return err
-		}))
+		var pathStreamers []jspath.UnmarshalerStream
+		for _, path := range c.Args() {
+			pathStreamers = append(pathStreamers, jspath.NewRawStreamUnmarshaler(path, func(key string, message json.RawMessage) error {
+				if printKey {
+					os.Stdout.WriteString(key)
+					os.Stdout.Write(space)
+				}
+				_, err := os.Stdout.Write(message)
+				_, err = os.Stdout.Write(newLine)
+				return err
+			}))
+		}
+		return jspath.NewStreamDecoder(f).Decode(pathStreamers...)
 	}
 
 	err := app.Run(os.Args)
