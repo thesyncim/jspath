@@ -1,7 +1,3 @@
-// Copyright 2010 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
 package jspath
 
 // JSON value parser state machine.
@@ -14,7 +10,6 @@ package jspath
 // before diving into the scanner itself.
 
 import (
-	"log"
 	"strconv"
 )
 
@@ -549,8 +544,6 @@ func (s *scanner) error(c byte, context string) int {
 	s.syntaxErr.context = context
 	s.syntaxErr.quote = c
 	s.err = &s.syntaxErr
-	log.Println(s.syntaxErr)
-	log.Println(string(byte(93)))
 	return scanError
 }
 

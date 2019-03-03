@@ -1,17 +1,16 @@
 package jspath
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"io"
-	"log"
 	"strings"
 
 	"github.com/gobwas/glob"
 )
 
-// A PathDecoder reads and decodes JSON values from an input stream at specified jsonp ath.
-type PathDecoder struct {
+// A StreamDecoder reads and decodes JSON values from an input stream at specified json path.
+type StreamDecoder struct {
 	r       io.Reader
 	buf     []byte
 	scanp   int   // start of unread data in buf
@@ -19,44 +18,37 @@ type PathDecoder struct {
 	scan    scanner
 	err     error
 
-	useNumber             bool
-	disallowUnknownFields bool
-
 	tokenState int
 	tokenStack []int
+
+	context context.Context
 
 	done chan error
 	path *pathBuilder
 }
 
-type PathItemStreamer interface {
+type UnmarshalerStream interface {
 	MatchPath() string
 	UnmarshalStream(key string, message json.RawMessage) error
 }
 
 type matcher func(curPath, jsPath string) (bool, string)
 
-// NewDecoder returns a new decoderWithoutKey that reads from r.
+// NewStreamDecoder returns a new StreamDecoder that reads from r.
 //
-// The decoderWithoutKey introduces its own buffering and may
+// The StreamDecoder introduces its own buffering and may
 // read data from r beyond the JSON values requested.
-func NewDecoder(r io.Reader) *PathDecoder {
-	return &PathDecoder{r: r, path: newPathBuilder(), done: make(chan error, 0)}
+func NewStreamDecoder(r io.Reader) *StreamDecoder {
+	return &StreamDecoder{r: r, path: newPathBuilder(), done: make(chan error, 0), context: context.Background()}
 }
 
-func (dec *PathDecoder) Done() <-chan error { return dec.done }
+func (dec *StreamDecoder) WithContext(ctx context.Context) {
+	dec.context = ctx
+}
 
-// DisallowUnknownFields causes the PathDecoder to return an error when the destination
-// is a struct and the input contains object keys which do not match any
-// non-ignored, exported fields in the destination.
-func (dec *PathDecoder) DisallowUnknownFields() { dec.disallowUnknownFields = true }
+func (dec *StreamDecoder) Done() <-chan error { return dec.done }
 
-// UnmarshalStream reads the next JSON-encoded value from its
-// input and stores it in the value pointed to by v.
-//
-// See the documentation for Unmarshal for details about
-// the conversion of JSON into a Go value.
-func (dec *PathDecoder) Decode(v interface{}) error {
+func (dec *StreamDecoder) decodeValue(v interface{}) error {
 	if dec.err != nil {
 		return dec.err
 	}
@@ -89,7 +81,7 @@ func (dec *PathDecoder) Decode(v interface{}) error {
 	return err
 }
 
-func (dec *PathDecoder) DecodeBytes() ([]byte, error) {
+func (dec *StreamDecoder) decodeBytes() ([]byte, error) {
 	if dec.err != nil {
 		return nil, dec.err
 	}
@@ -123,15 +115,9 @@ func (dec *PathDecoder) DecodeBytes() ([]byte, error) {
 	return out, err
 }
 
-// Buffered returns a reader of the data remaining in the PathDecoder's
-// buffer. The reader is valid until the next call to UnmarshalStream.
-func (dec *PathDecoder) Buffered() io.Reader {
-	return bytes.NewReader(dec.buf[dec.scanp:])
-}
-
 // readValue reads a JSON value into dec.buf.
 // It returns the length of the encoding.
-func (dec *PathDecoder) readValue() (int, error) {
+func (dec *StreamDecoder) readValue() (int, error) {
 	dec.scan.reset()
 
 	scanp := dec.scanp
@@ -182,7 +168,7 @@ Input:
 	return scanp - dec.scanp, nil
 }
 
-func (dec *PathDecoder) refill() error {
+func (dec *StreamDecoder) refill() error {
 	// Make room to read more into the buffer.
 	// First slide down data already consumed.
 	if dec.scanp > 0 {
@@ -218,7 +204,7 @@ func nonSpace(b []byte) bool {
 
 // A Token holds a value of one of these types:
 //
-//	Delim, for the four JSON delimiters [ ] { }
+//	delim, for the four JSON delimiters [ ] { }
 //	bool, for JSON booleans
 //	float64, for JSON numbers
 //	Number, for JSON numbers
@@ -240,13 +226,13 @@ const (
 )
 
 // advance tokenstate from a separator state to a value state
-func (dec *PathDecoder) tokenPrepareForDecode() error {
-	// Note: Not calling Peek before switch, to avoid
-	// putting Peek into the standard UnmarshalStream path.
-	// Peek is only called when using the Token API.
+func (dec *StreamDecoder) tokenPrepareForDecode() error {
+	// Note: Not calling peek before switch, to avoid
+	// putting peek into the standard UnmarshalStream path.
+	// peek is only called when using the Token API.
 	switch dec.tokenState {
 	case tokenArrayComma:
-		c, err := dec.Peek()
+		c, err := dec.peek()
 		if err != nil {
 			return err
 		}
@@ -256,7 +242,7 @@ func (dec *PathDecoder) tokenPrepareForDecode() error {
 		dec.scanp++
 		dec.tokenState = tokenArrayValue
 	case tokenObjectColon:
-		c, err := dec.Peek()
+		c, err := dec.peek()
 		if err != nil {
 			return err
 		}
@@ -269,7 +255,7 @@ func (dec *PathDecoder) tokenPrepareForDecode() error {
 	return nil
 }
 
-func (dec *PathDecoder) tokenValueAllowed() bool {
+func (dec *StreamDecoder) tokenValueAllowed() bool {
 	switch dec.tokenState {
 	case tokenTopValue, tokenArrayStart, tokenArrayValue, tokenObjectValue:
 		return true
@@ -277,7 +263,7 @@ func (dec *PathDecoder) tokenValueAllowed() bool {
 	return false
 }
 
-func (dec *PathDecoder) tokenValueEnd() {
+func (dec *StreamDecoder) tokenValueEnd() {
 	switch dec.tokenState {
 	case tokenArrayStart, tokenArrayValue:
 		dec.tokenState = tokenArrayComma
@@ -286,137 +272,7 @@ func (dec *PathDecoder) tokenValueEnd() {
 	}
 }
 
-// A Delim is a JSON array or object delimiter, one of [ ] { or }.
-type Delim rune
-
-func (d Delim) String() string {
-	return string(d)
-}
-
-// Token returns the next JSON token in the input stream.
-// At the end of the input stream, Token returns nil, io.EOF.
-//
-// Token guarantees that the delimiters [ ] { } it returns are
-// properly nested and matched: if Token encounters an unexpected
-// delimiter in the input, it will return an error.
-//
-// The input stream consists of basic JSON values—bool, string,
-// number, and null—along with delimiters [ ] { } of type Delim
-// to mark the start and end of arrays and objects.
-// Commas and colons are elided.
-func (dec *PathDecoder) Token() (Token, error) {
-	for {
-		c, err := dec.Peek()
-		if err != nil {
-			return nil, err
-		}
-		switch c {
-		case '[':
-			if !dec.tokenValueAllowed() {
-				return dec.tokenError(c)
-			}
-			dec.scanp++
-			dec.tokenStack = append(dec.tokenStack, dec.tokenState)
-			dec.tokenState = tokenArrayStart
-			return Delim('['), nil
-
-		case ']':
-			if dec.tokenState != tokenArrayStart && dec.tokenState != tokenArrayComma {
-				return dec.tokenError(c)
-			}
-			dec.scanp++
-			dec.tokenState = dec.tokenStack[len(dec.tokenStack)-1]
-			dec.tokenStack = dec.tokenStack[:len(dec.tokenStack)-1]
-			dec.tokenValueEnd()
-			return Delim(']'), nil
-
-		case '{':
-			if !dec.tokenValueAllowed() {
-				return dec.tokenError(c)
-			}
-			dec.scanp++
-			dec.tokenStack = append(dec.tokenStack, dec.tokenState)
-			dec.tokenState = tokenObjectStart
-			return Delim('{'), nil
-
-		case '}':
-			if dec.tokenState != tokenObjectStart && dec.tokenState != tokenObjectComma {
-				return dec.tokenError(c)
-			}
-			dec.scanp++
-			dec.tokenState = dec.tokenStack[len(dec.tokenStack)-1]
-			dec.tokenStack = dec.tokenStack[:len(dec.tokenStack)-1]
-			dec.tokenValueEnd()
-			return Delim('}'), nil
-
-		case ':':
-			if dec.tokenState != tokenObjectColon {
-				return dec.tokenError(c)
-			}
-			dec.scanp++
-			dec.tokenState = tokenObjectValue
-			continue
-
-		case ',':
-			if dec.tokenState == tokenArrayComma {
-				dec.scanp++
-				dec.tokenState = tokenArrayValue
-				continue
-			}
-			if dec.tokenState == tokenObjectComma {
-				dec.scanp++
-				dec.tokenState = tokenObjectKey
-				continue
-			}
-			return dec.tokenError(c)
-
-		case '"':
-			if dec.tokenState == tokenObjectStart || dec.tokenState == tokenObjectKey {
-				var x string
-				old := dec.tokenState
-				dec.tokenState = tokenTopValue
-				err := dec.Decode(&x)
-				dec.tokenState = old
-				if err != nil {
-					return nil, err
-				}
-				dec.tokenState = tokenObjectColon
-				return x, nil
-			}
-			fallthrough
-
-		default:
-			if !dec.tokenValueAllowed() {
-				return dec.tokenError(c)
-			}
-			var x interface{}
-			if err := dec.Decode(&x); err != nil {
-				return nil, err
-			}
-
-			return x, nil
-		}
-	}
-}
-
-type RawDecoder func(message json.RawMessage) error
-
-type RawDecoderKey func(key string, message json.RawMessage) error
-
-func (dec *PathDecoder) DecodeStream(path string, decoder RawDecoder) (err error) {
-	matcher, err := compilePath(path)
-	if err != nil {
-		return err
-	}
-	err = dec.decode(decodeMatcher{decoder: decoderWithoutKey{dec: decoder, jspath: path}, matcher: matcher})
-	go func() {
-		dec.done <- err
-		close(dec.done)
-	}()
-	return err
-}
-
-func (dec *PathDecoder) DecodeStreamItems(itemDecoders ...PathItemStreamer) (err error) {
+func (dec *StreamDecoder) Decode(itemDecoders ...UnmarshalerStream) (err error) {
 	var decoders []decodeMatcher
 	for i := range itemDecoders {
 		matcher, err := compilePath(itemDecoders[i].MatchPath())
@@ -425,65 +281,56 @@ func (dec *PathDecoder) DecodeStreamItems(itemDecoders ...PathItemStreamer) (err
 		}
 		decoders = append(decoders, decodeMatcher{decoder: itemDecoders[i], matcher: matcher})
 	}
-	err = dec.decode(decoders...)
-	go func() {
-		dec.done <- err
+	go dec.decode(decoders...)
+
+	select {
+	case <-dec.context.Done():
+		return dec.context.Err()
+	case doneErr := <-dec.Done():
+		return doneErr
+
+	}
+}
+
+func (dec *StreamDecoder) decode(matchers ...decodeMatcher) {
+	defer func() {
 		close(dec.done)
 	}()
-
-	return err
-}
-
-type Decoder interface {
-	UnmarshalStream(key string, message json.RawMessage) error
-}
-
-type decoderWithoutKey struct {
-	dec    func(message json.RawMessage) error
-	jspath string
-}
-
-func (d decoderWithoutKey) MatchPath() string {
-	return d.jspath
-}
-
-func (d decoderWithoutKey) UnmarshalStream(key string, message json.RawMessage) error {
-	return d.dec(message)
-}
-
-func (dec *PathDecoder) decode(matchers ...decodeMatcher) (err error) {
 	for {
-		c, err := dec.Peek()
+		c, err := dec.peek()
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
-			return err
+			dec.done <- err
+			return
 		}
-		log.Println(string(c), dec.path.Path())
 		switch c {
 		case '[':
 			if !dec.tokenValueAllowed() {
-				return dec.tokenError2(c)
+				dec.done <- dec.tokenError(c)
+				return
 			}
 			curPath := dec.path.Path()
 			match, itemDecoder := dmatcher(matchers).match(curPath)
 			dec.scanp++
 			dec.tokenStack = append(dec.tokenStack, dec.tokenState)
 			dec.tokenState = tokenArrayStart
-			if dec.More() {
+			if dec.more() {
 				dec.path.StartArray()
 				if match {
 					for {
-						if !dec.More() {
+						if !dec.more() {
 							break
 						}
-						bytes, err := dec.DecodeBytes()
+						bytes, err := dec.decodeBytes()
 						if err != nil {
-							return err
+							dec.done <- err
+							return
 						}
 						if err := itemDecoder.decoder.UnmarshalStream(curPath, bytes); err != nil {
-							return err
+							dec.done <- err
+							return
 						}
 					}
 				}
@@ -491,7 +338,8 @@ func (dec *PathDecoder) decode(matchers ...decodeMatcher) (err error) {
 			continue
 		case ']':
 			if dec.tokenState != tokenArrayStart && dec.tokenState != tokenArrayComma {
-				return dec.tokenError2(c)
+				dec.done <- dec.tokenError(c)
+				return
 			}
 			dec.scanp++
 			dec.tokenState = dec.tokenStack[len(dec.tokenStack)-1]
@@ -502,41 +350,45 @@ func (dec *PathDecoder) decode(matchers ...decodeMatcher) (err error) {
 
 		case '{':
 			if !dec.tokenValueAllowed() {
-				return dec.tokenError2(c)
+				dec.done <- dec.tokenError(c)
+				return
 			}
 			curPath := dec.path.Path()
 			match, itemDecoder := dmatcher(matchers).match(curPath)
-			if dec.More() {
+			if dec.more() {
 				if match {
 					if curPath == "$" {
 						for {
-							if !dec.More() {
+							if !dec.more() {
 								break
 
 							}
-							bytes, err := dec.DecodeBytes()
+							bytes, err := dec.decodeBytes()
 							if err != nil {
 								if err == io.EOF {
 									break
 								}
-								return err
+								dec.done <- err
+								return
 							}
-							log.Println(bytes)
 							if err := itemDecoder.decoder.UnmarshalStream(curPath, bytes); err != nil {
-								return err
+								dec.done <- err
+								return
 							}
 						}
 					}
-					bytes, err := dec.DecodeBytes()
+					bytes, err := dec.decodeBytes()
 					if err != nil {
 						if err == io.EOF {
 							break
 						}
-						return err
+						dec.done <- err
+						return
 					}
-					log.Println(bytes)
+
 					if err := itemDecoder.decoder.UnmarshalStream(curPath, bytes); err != nil {
-						return err
+						dec.done <- err
+						return
 					}
 					continue
 				}
@@ -549,7 +401,8 @@ func (dec *PathDecoder) decode(matchers ...decodeMatcher) (err error) {
 
 		case '}':
 			if dec.tokenState != tokenObjectStart && dec.tokenState != tokenObjectComma {
-				return dec.tokenError2(c)
+				dec.done <- dec.tokenError(c)
+				return
 			}
 			dec.scanp++
 			dec.tokenState = dec.tokenStack[len(dec.tokenStack)-1]
@@ -560,7 +413,8 @@ func (dec *PathDecoder) decode(matchers ...decodeMatcher) (err error) {
 			continue
 		case ':':
 			if dec.tokenState != tokenObjectColon {
-				return dec.tokenError2(c)
+				dec.done <- dec.tokenError(c)
+				return
 			}
 			dec.scanp++
 			dec.tokenState = tokenObjectValue
@@ -578,16 +432,18 @@ func (dec *PathDecoder) decode(matchers ...decodeMatcher) (err error) {
 				dec.tokenState = tokenObjectKey
 				continue
 			}
-			return dec.tokenError2(c)
+			dec.done <- dec.tokenError(c)
+			return
 
 		case '"':
 			if dec.tokenState == tokenObjectStart || dec.tokenState == tokenObjectKey {
 				old := dec.tokenState
 				dec.tokenState = tokenTopValue
-				keyBytes, err := dec.DecodeBytes()
+				keyBytes, err := dec.decodeBytes()
 				dec.tokenState = old
 				if err != nil {
-					return err
+					dec.done <- err
+					return
 				}
 				dec.tokenState = tokenObjectColon
 				dec.path.SetObjectKey(keyBytes[1 : len(keyBytes)-1])
@@ -597,44 +453,30 @@ func (dec *PathDecoder) decode(matchers ...decodeMatcher) (err error) {
 
 		default:
 			if !dec.tokenValueAllowed() {
-				return dec.tokenError2(c)
+				dec.done <- dec.tokenError(c)
+				return
 			}
 
-			if bytes, err := dec.DecodeBytes(); err != nil {
-				return err
+			if bytes, err := dec.decodeBytes(); err != nil {
+				dec.done <- err
+				return
 			} else {
 				curPath := dec.path.Path()
 				if match, itemDecoder := dmatcher(matchers).match(curPath); match {
 					if err := itemDecoder.decoder.UnmarshalStream(curPath, bytes); err != nil {
-						return err
+						dec.done <- err
+						return
 					}
 				}
 			}
 		}
 	}
-	return nil
+	dec.done <- nil
+	return
+
 }
 
-func (dec *PathDecoder) tokenError(c byte) (Token, error) {
-	var context string
-	switch dec.tokenState {
-	case tokenTopValue:
-		context = " looking for beginning of value"
-	case tokenArrayStart, tokenArrayValue, tokenObjectValue:
-		context = " looking for beginning of value"
-	case tokenArrayComma:
-		context = " after array element"
-	case tokenObjectKey:
-		context = " looking for beginning of object key string"
-	case tokenObjectColon:
-		context = " after object key"
-	case tokenObjectComma:
-		context = " after object key:value pair"
-	}
-	return nil, &SyntaxError{msg: "invalid character " + quoteChar(c) + " " + context, Offset: dec.offset()}
-}
-
-func (dec *PathDecoder) tokenError2(c byte) error {
+func (dec *StreamDecoder) tokenError(c byte) error {
 	var context string
 	switch dec.tokenState {
 	case tokenTopValue:
@@ -653,14 +495,14 @@ func (dec *PathDecoder) tokenError2(c byte) error {
 	return &SyntaxError{msg: "invalid character " + quoteChar(c) + " " + context, Offset: dec.offset()}
 }
 
-// More reports whether there is another element in the
+// more reports whether there is another element in the
 // current array or object being parsed.
-func (dec *PathDecoder) More() bool {
-	c, err := dec.Peek()
+func (dec *StreamDecoder) more() bool {
+	c, err := dec.peek()
 	return err == nil && c != ']' && c != '}'
 }
 
-func (dec *PathDecoder) Peek() (byte, error) {
+func (dec *StreamDecoder) peek() (byte, error) {
 	var err error
 	for {
 		for i := dec.scanp; i < len(dec.buf); i++ {
@@ -679,7 +521,7 @@ func (dec *PathDecoder) Peek() (byte, error) {
 	}
 }
 
-func (dec *PathDecoder) offset() int64 {
+func (dec *StreamDecoder) offset() int64 {
 	return dec.scanned + int64(dec.scanp)
 }
 
@@ -709,7 +551,7 @@ func escapeGlob(jsPath string) string {
 }
 
 type decodeMatcher struct {
-	decoder PathItemStreamer
+	decoder UnmarshalerStream
 	matcher matcher
 }
 
@@ -730,4 +572,21 @@ func (matchers dmatcher) match(curPath string) (bool, *decodeMatcher) {
 		return false, nil
 	}
 	return true, &matchers[found]
+}
+
+func NewRawStreamUnmarshaler(matchPath string, onMatch func(key string, message json.RawMessage) error) UnmarshalerStream {
+	return &RawStreamUnmarshaler{path: matchPath, onMatch: onMatch}
+}
+
+type RawStreamUnmarshaler struct {
+	path    string
+	onMatch func(key string, message json.RawMessage) error
+}
+
+func (r *RawStreamUnmarshaler) MatchPath() string {
+	return r.path
+}
+
+func (r *RawStreamUnmarshaler) UnmarshalStream(key string, message json.RawMessage) error {
+	return r.onMatch(key, message)
 }

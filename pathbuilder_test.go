@@ -1,15 +1,17 @@
 package jspath
 
 import (
-	"github.com/gobwas/glob"
 	"log"
 	"testing"
 )
 
+func init() {
+	log.SetFlags(log.Lshortfile)
+
+}
 func TestPath(t *testing.T) {
 	path := newPathBuilder()
 	path.StartArray()
-	log.Println(path.Path())
 
 	path = newPathBuilder()
 	path.StartObject()
@@ -20,7 +22,6 @@ func TestPath(t *testing.T) {
 	path.IncrementArrayIndex()
 	path.IncrementArrayIndex()
 	path.IncrementArrayIndex()
-	log.Println(path.Path())
 }
 
 func BenchmarkNewPathBuilder(b *testing.B) {
@@ -38,9 +39,4 @@ func BenchmarkNewPathBuilder(b *testing.B) {
 		path.EndArray()
 
 	}
-}
-
-func TestPath_MatchString(t *testing.T) {
-	exp := glob.MustCompile(`$.abc\[*\]`)
-	log.Println(exp.Match("$.abc[0]"))
 }

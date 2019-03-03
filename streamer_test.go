@@ -129,14 +129,14 @@ func TestDecodePath(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := NewDecoder(strings.NewReader(testdata))
+			s := NewStreamDecoder(strings.NewReader(testdata))
 			var results []json.RawMessage
-			err := s.DecodeStream(tc.path, func(message json.RawMessage) error {
+			err := s.Decode(NewRawStreamUnmarshaler(tc.path, func(key string, message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
 				return nil
-			})
+			}))
 			require.NoError(t, err)
 			require.Equal(t, len(tc.want), len(results))
 			for i := range tc.want {
@@ -264,14 +264,14 @@ func TestDecodePathMultiple(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := NewDecoder(strings.NewReader(testdataMultiple))
+			s := NewStreamDecoder(strings.NewReader(testdataMultiple))
 			var results []json.RawMessage
-			err := s.DecodeStream(tc.path, func(message json.RawMessage) error {
+			err := s.Decode(NewRawStreamUnmarshaler(tc.path, func(key string, message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
 				return nil
-			})
+			}))
 			require.NoError(t, err)
 			require.Equal(t, len(tc.want), len(results))
 			for i := range tc.want {
@@ -354,14 +354,14 @@ func TestDecodePathMultipleRegex(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := NewDecoder(strings.NewReader(testdataMultiple))
+			s := NewStreamDecoder(strings.NewReader(testdataMultiple))
 			var results []json.RawMessage
-			err := s.DecodeStream(tc.path, func(message json.RawMessage) error {
+			err := s.Decode(NewRawStreamUnmarshaler(tc.path, func(key string, message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
 				return nil
-			})
+			}))
 			require.NoError(t, err)
 			require.Equal(t, len(tc.want), len(results))
 			for i := range tc.want {
@@ -425,14 +425,14 @@ func TestHandleRoot(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := NewDecoder(strings.NewReader(tc.input))
+			s := NewStreamDecoder(strings.NewReader(tc.input))
 			var results []json.RawMessage
-			err := s.DecodeStream(tc.path, func(message json.RawMessage) error {
+			err := s.Decode(NewRawStreamUnmarshaler(tc.path, func(key string, message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
 				return nil
-			})
+			}))
 			require.NoError(t, err)
 			require.Equal(t, len(tc.want), len(results))
 			for i := range tc.want {
@@ -471,14 +471,14 @@ func TestDecodeSimpleTypes(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := NewDecoder(strings.NewReader(tc.input))
+			s := NewStreamDecoder(strings.NewReader(tc.input))
 			var results []json.RawMessage
-			err := s.DecodeStream(tc.path, func(message json.RawMessage) error {
+			err := s.Decode(NewRawStreamUnmarshaler(tc.path, func(key string, message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
 				return nil
-			})
+			}))
 			require.NoError(t, err)
 			require.Equal(t, len(tc.want), len(results))
 			for i := range tc.want {
