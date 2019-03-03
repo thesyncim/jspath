@@ -131,12 +131,12 @@ func TestDecodePath(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewStreamDecoder(strings.NewReader(testdata))
 			var results []json.RawMessage
-			err := s.Decode(NewRawStreamUnmarshaler(tc.path, func(key string, message json.RawMessage) error {
+			err := s.DecodePath(tc.path, func(key string, message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
 				return nil
-			}))
+			})
 			require.NoError(t, err)
 			require.Equal(t, len(tc.want), len(results))
 			for i := range tc.want {

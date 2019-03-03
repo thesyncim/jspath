@@ -253,6 +253,23 @@ func (dec *StreamDecoder) Decode(itemDecoders ...UnmarshalerStream) (err error) 
 	}
 }
 
+func (dec *StreamDecoder) DecodePath(jsPath string, onPath func(key string, message json.RawMessage) error) (err error) {
+	matcher, err := dec.compilePath(jsPath)
+	if err != nil {
+		return err
+	}
+	go dec.decode(decodeMatcher{decoder: NewRawStreamUnmarshaler(jsPath, onPath), matcher: matcher})
+
+	select {
+	case <-dec.context.Done():
+		close(dec.done)
+		return dec.context.Err()
+	case doneErr := <-dec.Done():
+		return doneErr
+
+	}
+}
+
 func (dec *StreamDecoder) decode(matchers ...decodeMatcher) {
 	defer func() {
 		close(dec.done)
