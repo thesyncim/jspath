@@ -458,7 +458,7 @@ func TestDecodeSimpleTypes(t *testing.T) {
 			},
 		},
 		{
-			name: "stream array match",
+			name: "stream array match wildcard",
 			path: "$.[*].abc",
 			input: `[{"abc":67}]
                    [{"abc":68}]
@@ -468,11 +468,11 @@ func TestDecodeSimpleTypes(t *testing.T) {
 			},
 		},
 		{
-			name:  "mixed",
+			name:  "mixed root level",
 			path:  "$.",
-			input: `"a" 3 ["s"] {"j":"j"}`,
+			input: `"a" 3 ["s"] {"j":"j"} false`,
 			want: []string{
-				`"a"`, "3", `["s"]`, `{"j":"j"}`,
+				`"a"`, "3", `["s"]`, `{"j":"j"}`, "false",
 			},
 		},
 	}
