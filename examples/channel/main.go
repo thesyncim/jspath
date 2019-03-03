@@ -43,15 +43,6 @@ var sample = `
 }
 `
 
-type Root struct {
-	Store Store `json:"store"`
-}
-
-type Store struct {
-	Book    []Book  `json:"book"`
-	Bicycle Bicycle `json:"bicycle"`
-}
-
 type Book struct {
 	Category string  `json:"category"`
 	Author   string  `json:"author"`
