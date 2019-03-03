@@ -56,21 +56,6 @@ type Bicycle struct {
 	Price float64 `json:"price"`
 }
 
-type BicycleStreamer chan *Bicycle
-
-func (BicycleStreamer) MatchPath() string {
-	return "$.store.bicycle"
-}
-
-func (bs BicycleStreamer) UnmarshalStream(key string, message json.RawMessage) error {
-	var b Bicycle
-	if err := json.Unmarshal(message, &b); err != nil {
-		return err
-	}
-	bs <- &b
-	return nil
-}
-
 type BookStreamer chan *Book
 
 func (BookStreamer) MatchPath() string {
@@ -79,6 +64,21 @@ func (BookStreamer) MatchPath() string {
 
 func (bs BookStreamer) UnmarshalStream(key string, message json.RawMessage) error {
 	var b Book
+	if err := json.Unmarshal(message, &b); err != nil {
+		return err
+	}
+	bs <- &b
+	return nil
+}
+
+type BicycleStreamer chan *Bicycle
+
+func (BicycleStreamer) MatchPath() string {
+	return "$.store.bicycle"
+}
+
+func (bs BicycleStreamer) UnmarshalStream(key string, message json.RawMessage) error {
+	var b Bicycle
 	if err := json.Unmarshal(message, &b); err != nil {
 		return err
 	}
