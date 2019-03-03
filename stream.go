@@ -9,6 +9,13 @@ import (
 	"github.com/gobwas/glob"
 )
 
+type UnmarshalerStream interface {
+	AtPath() string
+	//UnmarshalStream is called once the patch is matched
+	//the content of the message is only valid until the function return
+	UnmarshalStream(key string, message json.RawMessage) error
+}
+
 // A StreamDecoder reads and decodes JSON values from an input stream at specified json path.
 type StreamDecoder struct {
 	r       io.Reader
@@ -25,13 +32,6 @@ type StreamDecoder struct {
 
 	done chan error
 	path *pathBuilder
-}
-
-type UnmarshalerStream interface {
-	MatchPath() string
-	//UnmarshalStream is called once the patch is matched
-	//the content of the message is only valid until the function return
-	UnmarshalStream(key string, message json.RawMessage) error
 }
 
 // NewStreamDecoder returns a new StreamDecoder that reads from r.
@@ -233,13 +233,13 @@ func (dec *StreamDecoder) tokenValueEnd() {
 }
 
 func (dec *StreamDecoder) Decode(itemDecoders ...UnmarshalerStream) (err error) {
-	var decoders []decodeMatcher
+	var decoders = make([]decoder, 0, len(itemDecoders))
 	for i := range itemDecoders {
-		matcher, err := dec.compilePath(itemDecoders[i].MatchPath())
+		matcher, err := dec.compilePath(itemDecoders[i].AtPath())
 		if err != nil {
 			return err
 		}
-		decoders = append(decoders, decodeMatcher{decoder: itemDecoders[i], matcher: matcher})
+		decoders = append(decoders, decoder{unmarshaler: itemDecoders[i], matcher: matcher})
 	}
 	go dec.decode(decoders...)
 
@@ -258,7 +258,7 @@ func (dec *StreamDecoder) DecodePath(jsPath string, onPath func(key string, mess
 	if err != nil {
 		return err
 	}
-	go dec.decode(decodeMatcher{decoder: NewRawStreamUnmarshaler(jsPath, onPath), matcher: matcher})
+	go dec.decode(decoder{unmarshaler: NewRawStreamUnmarshaler(jsPath, onPath), matcher: matcher})
 
 	select {
 	case <-dec.context.Done():
@@ -270,7 +270,7 @@ func (dec *StreamDecoder) DecodePath(jsPath string, onPath func(key string, mess
 	}
 }
 
-func (dec *StreamDecoder) decode(matchers ...decodeMatcher) {
+func (dec *StreamDecoder) decode(matchers ...decoder) {
 	defer func() {
 		close(dec.done)
 	}()
@@ -314,7 +314,7 @@ func (dec *StreamDecoder) decode(matchers ...decodeMatcher) {
 							dec.done <- err
 							return
 						}
-						if err := itemDecoder.decoder.UnmarshalStream(curPath, bytes); err != nil {
+						if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
 							dec.done <- err
 							return
 						}
@@ -357,7 +357,7 @@ func (dec *StreamDecoder) decode(matchers ...decodeMatcher) {
 								dec.done <- err
 								return
 							}
-							if err := itemDecoder.decoder.UnmarshalStream(curPath, bytes); err != nil {
+							if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
 								dec.done <- err
 								return
 							}
@@ -372,7 +372,7 @@ func (dec *StreamDecoder) decode(matchers ...decodeMatcher) {
 						return
 					}
 
-					if err := itemDecoder.decoder.UnmarshalStream(curPath, bytes); err != nil {
+					if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
 						dec.done <- err
 						return
 					}
@@ -449,7 +449,7 @@ func (dec *StreamDecoder) decode(matchers ...decodeMatcher) {
 			} else {
 				curPath := dec.path.Path()
 				if match, itemDecoder := matcher(matchers).match(curPath); match {
-					if err := itemDecoder.decoder.UnmarshalStream(curPath, bytes); err != nil {
+					if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
 						dec.done <- err
 						return
 					}
@@ -511,23 +511,23 @@ func (dec *StreamDecoder) offset() int64 {
 	return dec.scanned + int64(dec.scanp)
 }
 
-func (dec *StreamDecoder) compilePath(jsPath string) (func(curPath, jsPath string) (bool, string), error) {
+func (dec *StreamDecoder) compilePath(jsPath string) (func(curPath, jsPath string) bool, error) {
 	if i := strings.IndexByte(jsPath, '*'); i != -1 {
 		s := escapeGlob(jsPath)
 		re, err := glob.Compile(s)
 		if err != nil {
 			return nil, err
 		}
-		return func(curPath string, jsPath string) (bool, string) {
-			return re.Match(curPath), curPath
+		return func(curPath string, jsPath string) bool {
+			return re.Match(curPath)
 		}, nil
 	}
-	return func(curPath string, jsPath string) (bool, string) {
+	return func(curPath string, jsPath string) bool {
 		//exception for root path
 		if curPath == "$" && jsPath == "$." {
-			return true, jsPath
+			return true
 		}
-		return curPath == jsPath, curPath
+		return curPath == jsPath
 	}, nil
 }
 
@@ -537,28 +537,21 @@ func escapeGlob(jsPath string) string {
 	return s
 }
 
-type decodeMatcher struct {
-	decoder UnmarshalerStream
-	matcher func(curPath, jsPath string) (bool, string)
+type decoder struct {
+	unmarshaler UnmarshalerStream
+	matcher     func(curPath, jsPath string) bool
 }
 
-type matcher []decodeMatcher
+type matcher []decoder
 
-func (matchers matcher) match(curPath string) (bool, *decodeMatcher) {
-	var found = -1
+func (matchers matcher) match(curPath string) (bool, decoder) {
 	for i := range matchers {
-		match, _ := matchers[i].matcher(curPath, matchers[i].decoder.MatchPath())
+		match := matchers[i].matcher(curPath, matchers[i].unmarshaler.AtPath())
 		if match {
-			if found != -1 {
-				panic(matchers[found].decoder.MatchPath() + " conflicts with" + matchers[i].decoder.MatchPath())
-			}
-			found = i
+			return true, matchers[i]
 		}
 	}
-	if found == -1 {
-		return false, nil
-	}
-	return true, &matchers[found]
+	return false, decoder{}
 }
 
 func NewRawStreamUnmarshaler(matchPath string, onMatch func(key string, message json.RawMessage) error) UnmarshalerStream {
@@ -570,7 +563,7 @@ type RawStreamUnmarshaler struct {
 	onMatch   func(key string, message json.RawMessage) error
 }
 
-func (r *RawStreamUnmarshaler) MatchPath() string {
+func (r *RawStreamUnmarshaler) AtPath() string {
 	return r.matchPath
 }
 

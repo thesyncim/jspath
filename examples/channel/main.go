@@ -58,7 +58,7 @@ type Bicycle struct {
 
 type BookStreamer chan *Book
 
-func (BookStreamer) MatchPath() string {
+func (BookStreamer) AtPath() string {
 	return "$.store.book"
 }
 
@@ -73,7 +73,7 @@ func (bs BookStreamer) UnmarshalStream(key string, message json.RawMessage) erro
 
 type BicycleStreamer chan *Bicycle
 
-func (BicycleStreamer) MatchPath() string {
+func (BicycleStreamer) AtPath() string {
 	return "$.store.bicycle[*]"
 }
 
