@@ -56,13 +56,7 @@ func (dec *StreamDecoder) Decode(itemDecoders ...UnmarshalerStream) (err error) 
 		decoders = append(decoders, decoder{unmarshaler: itemDecoders[i], matcher: matcher})
 	}
 	go dec.decode(decoders...)
-
-	select {
-	case <-dec.context.Done():
-		return dec.context.Err()
-	case doneErr := <-dec.Done():
-		return doneErr
-	}
+	return <-dec.Done()
 }
 
 func (dec *StreamDecoder) DecodePath(jsPath string, onPath func(key string, message json.RawMessage) error) (err error) {
@@ -72,13 +66,7 @@ func (dec *StreamDecoder) DecodePath(jsPath string, onPath func(key string, mess
 	}
 	go dec.decode(decoder{unmarshaler: NewRawStreamUnmarshaler(jsPath, onPath), matcher: matcher})
 
-	select {
-	case <-dec.context.Done():
-		close(dec.done)
-		return dec.context.Err()
-	case doneErr := <-dec.Done():
-		return doneErr
-	}
+	return <-dec.Done()
 }
 
 func (dec *StreamDecoder) Done() <-chan error { return dec.done }
@@ -112,6 +100,7 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 	for {
 		select {
 		case <-dec.context.Done():
+			dec.done <- dec.context.Err()
 			return
 		default:
 		}
