@@ -59,7 +59,7 @@ type Bicycle struct {
 type BookStreamer chan *Book
 
 func (BookStreamer) AtPath() string {
-	return "$.store.book"
+	return "$.store.book[*]"
 }
 
 func (bs BookStreamer) UnmarshalStream(key string, message json.RawMessage) error {
@@ -74,7 +74,7 @@ func (bs BookStreamer) UnmarshalStream(key string, message json.RawMessage) erro
 type BicycleStreamer chan *Bicycle
 
 func (BicycleStreamer) AtPath() string {
-	return "$.store.bicycle[*]"
+	return "$.store.bicycle"
 }
 
 func (bs BicycleStreamer) UnmarshalStream(key string, message json.RawMessage) error {
