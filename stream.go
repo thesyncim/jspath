@@ -5,8 +5,21 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/gobwas/glob"
+)
+
+const (
+	tokenTopValue = iota
+	tokenArrayStart
+	tokenArrayValue
+	tokenArrayComma
+	tokenObjectStart
+	tokenObjectKey
+	tokenObjectColon
+	tokenObjectValue
+	tokenObjectComma
 )
 
 type UnmarshalerStream interface {
@@ -23,6 +36,7 @@ type StreamDecoder struct {
 	scanp   int   // start of unread data in buf
 	scanned int64 // amount of data already scanned
 	scan    scanner
+	errMu   sync.Mutex
 	err     error
 
 	tokenState int
@@ -30,7 +44,7 @@ type StreamDecoder struct {
 
 	context context.Context
 
-	done chan error
+	done chan struct{}
 	path *pathBuilder
 }
 
@@ -39,7 +53,7 @@ type StreamDecoder struct {
 // The StreamDecoder introduces its own buffering and may
 // read data from r beyond the JSON values requested.
 func NewStreamDecoder(r io.Reader) *StreamDecoder {
-	return &StreamDecoder{r: r, path: newPathBuilder(), done: make(chan error, 0), context: context.Background()}
+	return &StreamDecoder{r: r, path: newPathBuilder(), done: make(chan struct{}, 0), context: context.Background()}
 }
 
 func (dec *StreamDecoder) WithContext(ctx context.Context) {
@@ -56,7 +70,8 @@ func (dec *StreamDecoder) Decode(itemDecoders ...UnmarshalerStream) (err error) 
 		decoders = append(decoders, decoder{unmarshaler: itemDecoders[i], matcher: matcher})
 	}
 	go dec.decode(decoders...)
-	return <-dec.Done()
+	<-dec.Done()
+	return dec.err
 }
 
 func (dec *StreamDecoder) DecodePath(jsPath string, onPath func(key string, message json.RawMessage) error) (err error) {
@@ -65,11 +80,17 @@ func (dec *StreamDecoder) DecodePath(jsPath string, onPath func(key string, mess
 		return err
 	}
 	go dec.decode(decoder{unmarshaler: NewRawStreamUnmarshaler(jsPath, onPath), matcher: matcher})
-	return <-dec.Done()
+	<-dec.Done()
+	return dec.err
 }
 
-func (dec *StreamDecoder) Done() <-chan error {
+func (dec *StreamDecoder) Done() <-chan struct{} {
 	return dec.done
+}
+
+//Err can only be called after the decode finish
+func (dec *StreamDecoder) Err() error {
+	return dec.err
 }
 
 func (dec *StreamDecoder) Reset(reader io.Reader) (err error) {
@@ -79,7 +100,7 @@ func (dec *StreamDecoder) Reset(reader io.Reader) (err error) {
 	default:
 		panic("cannot call reset while decoder is running")
 	}
-	dec.done = make(chan error)
+	dec.done = make(chan struct{})
 	for i := range dec.path.Segments {
 		dec.path.Segments[i].Reset()
 	}
@@ -98,28 +119,6 @@ func (dec *StreamDecoder) Reset(reader io.Reader) (err error) {
 	return
 }
 
-// A Token holds a value of one of these types:
-//
-//	delim, for the four JSON delimiters [ ] { }
-//	bool, for JSON booleans
-//	float64, for JSON numbers
-//	Number, for JSON numbers
-//	string, for JSON string literals
-//	nil, for JSON null
-//
-
-const (
-	tokenTopValue = iota
-	tokenArrayStart
-	tokenArrayValue
-	tokenArrayComma
-	tokenObjectStart
-	tokenObjectKey
-	tokenObjectColon
-	tokenObjectValue
-	tokenObjectComma
-)
-
 func (dec *StreamDecoder) decode(decoders ...decoder) {
 	defer func() {
 		close(dec.done)
@@ -127,7 +126,7 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 	for {
 		select {
 		case <-dec.context.Done():
-			dec.done <- dec.context.Err()
+			dec.err = dec.context.Err()
 			return
 		default:
 		}
@@ -136,17 +135,17 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 			if err == io.EOF {
 				break
 			}
-			dec.done <- err
+			dec.err = err
 			return
 		}
 		switch c {
 		case '[':
 			if !dec.tokenValueAllowed() {
-				dec.done <- dec.tokenError(c)
+				dec.err = dec.tokenError(c)
 				return
 			}
-			curPath := dec.path.Path()
 			if dec.more() {
+				curPath := dec.path.Path()
 				dec.path.StartArray()
 				match, itemDecoder := matcher(decoders).match(curPath)
 				if match {
@@ -155,7 +154,7 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 						if err == io.EOF {
 							break
 						}
-						dec.done <- err
+						dec.err = err
 						return
 					}
 					//update state
@@ -163,7 +162,7 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 					dec.tokenValueEnd()
 
 					if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
-						dec.done <- err
+						dec.err = err
 						return
 					}
 					continue
@@ -175,7 +174,7 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 			continue
 		case ']':
 			if dec.tokenState != tokenArrayStart && dec.tokenState != tokenArrayComma {
-				dec.done <- dec.tokenError(c)
+				dec.err = dec.tokenError(c)
 				return
 			}
 			dec.scanp++
@@ -187,24 +186,24 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 
 		case '{':
 			if !dec.tokenValueAllowed() {
-				dec.done <- dec.tokenError(c)
+				dec.err = dec.tokenError(c)
 				return
 			}
-			curPath := dec.path.Path()
-			match, itemDecoder := matcher(decoders).match(curPath)
 			if dec.more() {
+				curPath := dec.path.Path()
+				match, itemDecoder := matcher(decoders).match(curPath)
 				if match {
 					bytes, err := dec.decodeBytes()
 					if err != nil {
 						if err == io.EOF {
 							break
 						}
-						dec.done <- err
+						dec.err = err
 						return
 					}
 
 					if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
-						dec.done <- err
+						dec.err = err
 						return
 					}
 					dec.tokenValueEnd()
@@ -219,7 +218,7 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 
 		case '}':
 			if dec.tokenState != tokenObjectStart && dec.tokenState != tokenObjectComma {
-				dec.done <- dec.tokenError(c)
+				dec.err = dec.tokenError(c)
 				return
 			}
 			dec.scanp++
@@ -231,7 +230,7 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 			continue
 		case ':':
 			if dec.tokenState != tokenObjectColon {
-				dec.done <- dec.tokenError(c)
+				dec.err = dec.tokenError(c)
 				return
 			}
 			dec.scanp++
@@ -250,7 +249,7 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 				dec.tokenState = tokenObjectKey
 				continue
 			}
-			dec.done <- dec.tokenError(c)
+			dec.err = dec.tokenError(c)
 			return
 
 		case '"':
@@ -260,7 +259,7 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 				keyBytes, err := dec.decodeBytes()
 				dec.tokenState = old
 				if err != nil {
-					dec.done <- err
+					dec.err = err
 					return
 				}
 				dec.tokenState = tokenObjectColon
@@ -271,25 +270,25 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 
 		default:
 			if !dec.tokenValueAllowed() {
-				dec.done <- dec.tokenError(c)
+				dec.err = dec.tokenError(c)
 				return
 			}
 
 			if bytes, err := dec.decodeBytes(); err != nil {
-				dec.done <- err
+				dec.err = err
 				return
 			} else {
 				curPath := dec.path.Path()
 				if match, itemDecoder := matcher(decoders).match(curPath); match {
 					if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
-						dec.done <- err
+						dec.err = err
 						return
 					}
 				}
 			}
 		}
 	}
-	dec.done <- nil
+	dec.err = nil
 	return
 }
 

@@ -37,11 +37,11 @@ func main() {
 		if _, err := os.Stat(src); os.IsNotExist(err) {
 			return err
 		}
-		f, err := os.Open(src)
+		source, err := os.Open(src)
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		defer source.Close()
 		var pathStreamers []jspath.UnmarshalerStream
 		for _, path := range c.Args() {
 			pathStreamers = append(pathStreamers, jspath.NewRawStreamUnmarshaler(path, func(key string, message json.RawMessage) error {
@@ -49,12 +49,12 @@ func main() {
 					os.Stdout.WriteString(key)
 					os.Stdout.Write(space)
 				}
-				_, err := os.Stdout.Write(message)
-				_, err = os.Stdout.Write(newLine)
-				return err
+				os.Stdout.Write(message)
+				os.Stdout.Write(newLine)
+				return nil
 			}))
 		}
-		return jspath.NewStreamDecoder(f).Decode(pathStreamers...)
+		return jspath.NewStreamDecoder(source).Decode(pathStreamers...)
 	}
 
 	err := app.Run(os.Args)

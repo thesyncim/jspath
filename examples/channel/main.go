@@ -102,10 +102,10 @@ func main() {
 	var done bool
 	for {
 		select {
-		case err := <-decoder.Done():
+		case <-decoder.Done():
 			done = true
-			if err != nil {
-				panic(err)
+			if decoder.Err() != nil {
+				panic(decoder.Err())
 			}
 			break
 		case book := <-bookStreamer:
