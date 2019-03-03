@@ -167,15 +167,6 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 			match, itemDecoder := matcher(decoders).match(curPath)
 			if dec.more() {
 				if match {
-					if curPath == "$" {
-						if err := dec.decodeAll(itemDecoder, curPath); err != nil {
-							if err == io.EOF {
-								break
-							}
-							dec.done <- err
-							return
-						}
-					}
 					bytes, err := dec.decodeBytes()
 					if err != nil {
 						if err == io.EOF {
