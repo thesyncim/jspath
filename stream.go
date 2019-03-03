@@ -85,6 +85,8 @@ func (dec *StreamDecoder) Reset(reader io.Reader) (err error) {
 	}
 	dec.path.Segments = dec.path.Segments[0:0]
 	dec.path.pathBuf.Reset()
+	dec.path.Extend()
+	dec.path.LastSegment().WriteByte('$')
 	dec.tokenStack = dec.tokenStack[0:0]
 	dec.tokenState = 0
 	dec.context = context.Background()

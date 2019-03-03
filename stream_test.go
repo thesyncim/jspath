@@ -442,7 +442,7 @@ func TestHandleRoot(t *testing.T) {
 	}
 }
 
-func TestDecodeSimpleTypes(t *testing.T) {
+func TestDecodeSimpleTypesAndReset(t *testing.T) {
 	var testcases = []struct {
 		name  string
 		path  string
@@ -477,17 +477,24 @@ func TestDecodeSimpleTypes(t *testing.T) {
 		},
 	}
 
+	var dec *StreamDecoder
 	for _, tc := range testcases {
+
 		t.Run(tc.name, func(t *testing.T) {
-			s := NewStreamDecoder(strings.NewReader(tc.input))
+			if dec == nil {
+				dec = NewStreamDecoder(strings.NewReader(tc.input))
+			} else {
+				dec.Reset(strings.NewReader(tc.input))
+			}
 			var results []json.RawMessage
-			err := s.Decode(NewRawStreamUnmarshaler(tc.path, func(key string, message json.RawMessage) error {
+			err := dec.Decode(NewRawStreamUnmarshaler(tc.path, func(key string, message json.RawMessage) error {
 				result := make(json.RawMessage, len(message))
 				copy(result, message)
 				results = append(results, result)
 				return nil
 			}))
 			require.NoError(t, err)
+
 			require.Equal(t, len(tc.want), len(results))
 			for i := range tc.want {
 				require.JSONEq(t, tc.want[i], string(results[i]))
