@@ -1,6 +1,7 @@
 package jspath
 
 import (
+	"github.com/stretchr/testify/require"
 	"log"
 	"testing"
 )
@@ -12,7 +13,6 @@ func init() {
 func TestPath(t *testing.T) {
 	path := newPathBuilder()
 	path.StartArray()
-
 	path = newPathBuilder()
 	path.StartObject()
 	path.SetObjectKey([]byte("key"))
@@ -22,6 +22,7 @@ func TestPath(t *testing.T) {
 	path.IncrementArrayIndex()
 	path.IncrementArrayIndex()
 	path.IncrementArrayIndex()
+	require.Equal(t, "$.key[5]", path.Path())
 }
 
 func BenchmarkNewPathBuilder(b *testing.B) {

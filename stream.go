@@ -72,6 +72,30 @@ func (dec *StreamDecoder) Done() <-chan error {
 	return dec.done
 }
 
+func (dec *StreamDecoder) Reset(reader io.Reader) (err error) {
+	select {
+	case <-dec.done:
+	//ok
+	default:
+		panic("cannot call reset while decoder is running")
+	}
+	dec.done = make(chan error)
+	for i := range dec.path.Segments {
+		dec.path.Segments[i].Reset()
+	}
+	dec.path.Segments = dec.path.Segments[0:0]
+	dec.path.pathBuf.Reset()
+	dec.tokenStack = dec.tokenStack[0:0]
+	dec.tokenState = 0
+	dec.context = context.Background()
+	dec.scan.reset()
+	dec.buf = dec.buf[0:0]
+	dec.scanned = 0
+	dec.scanp = 0
+	dec.r = reader
+	return
+}
+
 // A Token holds a value of one of these types:
 //
 //	delim, for the four JSON delimiters [ ] { }
