@@ -46,7 +46,254 @@ func (dec *StreamDecoder) WithContext(ctx context.Context) {
 	dec.context = ctx
 }
 
+func (dec *StreamDecoder) Decode(itemDecoders ...UnmarshalerStream) (err error) {
+	var decoders = make([]decoder, 0, len(itemDecoders))
+	for i := range itemDecoders {
+		matcher, err := dec.compilePath(itemDecoders[i].AtPath())
+		if err != nil {
+			return err
+		}
+		decoders = append(decoders, decoder{unmarshaler: itemDecoders[i], matcher: matcher})
+	}
+	go dec.decode(decoders...)
+
+	select {
+	case <-dec.context.Done():
+		//close(dec.done)
+		return dec.context.Err()
+	case doneErr := <-dec.Done():
+		return doneErr
+	}
+}
+
+func (dec *StreamDecoder) DecodePath(jsPath string, onPath func(key string, message json.RawMessage) error) (err error) {
+	matcher, err := dec.compilePath(jsPath)
+	if err != nil {
+		return err
+	}
+	go dec.decode(decoder{unmarshaler: NewRawStreamUnmarshaler(jsPath, onPath), matcher: matcher})
+
+	select {
+	case <-dec.context.Done():
+		close(dec.done)
+		return dec.context.Err()
+	case doneErr := <-dec.Done():
+		return doneErr
+	}
+}
+
 func (dec *StreamDecoder) Done() <-chan error { return dec.done }
+
+// A Token holds a value of one of these types:
+//
+//	delim, for the four JSON delimiters [ ] { }
+//	bool, for JSON booleans
+//	float64, for JSON numbers
+//	Number, for JSON numbers
+//	string, for JSON string literals
+//	nil, for JSON null
+//
+
+const (
+	tokenTopValue = iota
+	tokenArrayStart
+	tokenArrayValue
+	tokenArrayComma
+	tokenObjectStart
+	tokenObjectKey
+	tokenObjectColon
+	tokenObjectValue
+	tokenObjectComma
+)
+
+func (dec *StreamDecoder) decode(decoders ...decoder) {
+	defer func() {
+		close(dec.done)
+	}()
+	for {
+		select {
+		case <-dec.context.Done():
+			return
+		default:
+		}
+		c, err := dec.peek()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			dec.done <- err
+			return
+		}
+		switch c {
+		case '[':
+			if !dec.tokenValueAllowed() {
+				dec.done <- dec.tokenError(c)
+				return
+			}
+			curPath := dec.path.Path()
+			dec.scanp++
+			dec.tokenStack = append(dec.tokenStack, dec.tokenState)
+			dec.tokenState = tokenArrayStart
+			if dec.more() {
+				dec.path.StartArray()
+				match, itemDecoder := matcher(decoders).match(curPath)
+				if match {
+					if err := dec.decodeAll(itemDecoder, curPath); err != nil {
+						if err == io.EOF {
+							break
+						}
+						dec.done <- err
+						return
+					}
+				}
+			}
+			continue
+		case ']':
+			if dec.tokenState != tokenArrayStart && dec.tokenState != tokenArrayComma {
+				dec.done <- dec.tokenError(c)
+				return
+			}
+			dec.scanp++
+			dec.tokenState = dec.tokenStack[len(dec.tokenStack)-1]
+			dec.tokenStack = dec.tokenStack[:len(dec.tokenStack)-1]
+			dec.path.EndObject()
+			dec.tokenValueEnd()
+			continue
+
+		case '{':
+			if !dec.tokenValueAllowed() {
+				dec.done <- dec.tokenError(c)
+				return
+			}
+			curPath := dec.path.Path()
+			match, itemDecoder := matcher(decoders).match(curPath)
+			if dec.more() {
+				if match {
+					if curPath == "$" {
+						if err := dec.decodeAll(itemDecoder, curPath); err != nil {
+							if err == io.EOF {
+								break
+							}
+							dec.done <- err
+							return
+						}
+					}
+					bytes, err := dec.decodeBytes()
+					if err != nil {
+						if err == io.EOF {
+							break
+						}
+						dec.done <- err
+						return
+					}
+
+					if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
+						dec.done <- err
+						return
+					}
+					continue
+				}
+			}
+			dec.scanp++
+			dec.tokenStack = append(dec.tokenStack, dec.tokenState)
+			dec.tokenState = tokenObjectStart
+			dec.path.StartObject()
+			continue
+
+		case '}':
+			if dec.tokenState != tokenObjectStart && dec.tokenState != tokenObjectComma {
+				dec.done <- dec.tokenError(c)
+				return
+			}
+			dec.scanp++
+			dec.tokenState = dec.tokenStack[len(dec.tokenStack)-1]
+			dec.tokenStack = dec.tokenStack[:len(dec.tokenStack)-1]
+			dec.path.EndObject()
+
+			dec.tokenValueEnd()
+			continue
+		case ':':
+			if dec.tokenState != tokenObjectColon {
+				dec.done <- dec.tokenError(c)
+				return
+			}
+			dec.scanp++
+			dec.tokenState = tokenObjectValue
+			continue
+
+		case ',':
+			if dec.tokenState == tokenArrayComma {
+				dec.scanp++
+				dec.path.IncrementArrayIndex()
+				dec.tokenState = tokenArrayValue
+				continue
+			}
+			if dec.tokenState == tokenObjectComma {
+				dec.scanp++
+				dec.tokenState = tokenObjectKey
+				continue
+			}
+			dec.done <- dec.tokenError(c)
+			return
+
+		case '"':
+			if dec.tokenState == tokenObjectStart || dec.tokenState == tokenObjectKey {
+				old := dec.tokenState
+				dec.tokenState = tokenTopValue
+				keyBytes, err := dec.decodeBytes()
+				dec.tokenState = old
+				if err != nil {
+					dec.done <- err
+					return
+				}
+				dec.tokenState = tokenObjectColon
+				dec.path.SetObjectKey(keyBytes[1 : len(keyBytes)-1])
+				continue
+			}
+			fallthrough
+
+		default:
+			if !dec.tokenValueAllowed() {
+				dec.done <- dec.tokenError(c)
+				return
+			}
+
+			if bytes, err := dec.decodeBytes(); err != nil {
+				dec.done <- err
+				return
+			} else {
+				curPath := dec.path.Path()
+				if match, itemDecoder := matcher(decoders).match(curPath); match {
+					if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
+						dec.done <- err
+						return
+					}
+				}
+			}
+		}
+	}
+	dec.done <- nil
+	return
+
+}
+
+//by default when a selector match is type [] we stream all the items
+//we might change this behaviour
+func (dec *StreamDecoder) decodeAll(decoder decoder, curPath string) error {
+	for {
+		if !dec.more() {
+			break
+		}
+		bytes, err := dec.decodeBytes()
+		if err != nil {
+			return err
+		}
+		if err := decoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func (dec *StreamDecoder) decodeBytes() ([]byte, error) {
 	if dec.err != nil {
@@ -163,28 +410,6 @@ func nonSpace(b []byte) bool {
 	return false
 }
 
-// A Token holds a value of one of these types:
-//
-//	delim, for the four JSON delimiters [ ] { }
-//	bool, for JSON booleans
-//	float64, for JSON numbers
-//	Number, for JSON numbers
-//	string, for JSON string literals
-//	nil, for JSON null
-//
-
-const (
-	tokenTopValue = iota
-	tokenArrayStart
-	tokenArrayValue
-	tokenArrayComma
-	tokenObjectStart
-	tokenObjectKey
-	tokenObjectColon
-	tokenObjectValue
-	tokenObjectComma
-)
-
 // advance tokenstate from a separator state to a value state
 func (dec *StreamDecoder) tokenPrepareForDecode() error {
 	// Note: Not calling peek before switch, to avoid
@@ -230,236 +455,6 @@ func (dec *StreamDecoder) tokenValueEnd() {
 	case tokenObjectValue:
 		dec.tokenState = tokenObjectComma
 	}
-}
-
-func (dec *StreamDecoder) Decode(itemDecoders ...UnmarshalerStream) (err error) {
-	var decoders = make([]decoder, 0, len(itemDecoders))
-	for i := range itemDecoders {
-		matcher, err := dec.compilePath(itemDecoders[i].AtPath())
-		if err != nil {
-			return err
-		}
-		decoders = append(decoders, decoder{unmarshaler: itemDecoders[i], matcher: matcher})
-	}
-	go dec.decode(decoders...)
-
-	select {
-	case <-dec.context.Done():
-		//close(dec.done)
-		return dec.context.Err()
-	case doneErr := <-dec.Done():
-		return doneErr
-
-	}
-}
-
-func (dec *StreamDecoder) DecodePath(jsPath string, onPath func(key string, message json.RawMessage) error) (err error) {
-	matcher, err := dec.compilePath(jsPath)
-	if err != nil {
-		return err
-	}
-	go dec.decode(decoder{unmarshaler: NewRawStreamUnmarshaler(jsPath, onPath), matcher: matcher})
-
-	select {
-	case <-dec.context.Done():
-		close(dec.done)
-		return dec.context.Err()
-	case doneErr := <-dec.Done():
-		return doneErr
-
-	}
-}
-
-func (dec *StreamDecoder) decode(matchers ...decoder) {
-	defer func() {
-		close(dec.done)
-	}()
-	for {
-		select {
-		case <-dec.context.Done():
-			return
-		default:
-		}
-		c, err := dec.peek()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			dec.done <- err
-			return
-		}
-		switch c {
-		case '[':
-			if !dec.tokenValueAllowed() {
-				dec.done <- dec.tokenError(c)
-				return
-			}
-			curPath := dec.path.Path()
-			match, itemDecoder := matcher(matchers).match(curPath)
-			dec.scanp++
-			dec.tokenStack = append(dec.tokenStack, dec.tokenState)
-			dec.tokenState = tokenArrayStart
-			if dec.more() {
-				dec.path.StartArray()
-				if match {
-					for {
-						if !dec.more() {
-							break
-						}
-						bytes, err := dec.decodeBytes()
-						if err != nil {
-							if err == io.EOF {
-								break
-							}
-							dec.done <- err
-							return
-						}
-						if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
-							dec.done <- err
-							return
-						}
-					}
-				}
-			}
-			continue
-		case ']':
-			if dec.tokenState != tokenArrayStart && dec.tokenState != tokenArrayComma {
-				dec.done <- dec.tokenError(c)
-				return
-			}
-			dec.scanp++
-			dec.tokenState = dec.tokenStack[len(dec.tokenStack)-1]
-			dec.tokenStack = dec.tokenStack[:len(dec.tokenStack)-1]
-			dec.path.EndObject()
-			dec.tokenValueEnd()
-			continue
-
-		case '{':
-			if !dec.tokenValueAllowed() {
-				dec.done <- dec.tokenError(c)
-				return
-			}
-			curPath := dec.path.Path()
-			match, itemDecoder := matcher(matchers).match(curPath)
-			if dec.more() {
-				if match {
-					if curPath == "$" {
-						for {
-							if !dec.more() {
-								break
-
-							}
-							bytes, err := dec.decodeBytes()
-							if err != nil {
-								if err == io.EOF {
-									break
-								}
-								dec.done <- err
-								return
-							}
-							if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
-								dec.done <- err
-								return
-							}
-						}
-					}
-					bytes, err := dec.decodeBytes()
-					if err != nil {
-						if err == io.EOF {
-							break
-						}
-						dec.done <- err
-						return
-					}
-
-					if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
-						dec.done <- err
-						return
-					}
-					continue
-				}
-			}
-			dec.scanp++
-			dec.tokenStack = append(dec.tokenStack, dec.tokenState)
-			dec.tokenState = tokenObjectStart
-			dec.path.StartObject()
-			continue
-
-		case '}':
-			if dec.tokenState != tokenObjectStart && dec.tokenState != tokenObjectComma {
-				dec.done <- dec.tokenError(c)
-				return
-			}
-			dec.scanp++
-			dec.tokenState = dec.tokenStack[len(dec.tokenStack)-1]
-			dec.tokenStack = dec.tokenStack[:len(dec.tokenStack)-1]
-			dec.path.EndObject()
-
-			dec.tokenValueEnd()
-			continue
-		case ':':
-			if dec.tokenState != tokenObjectColon {
-				dec.done <- dec.tokenError(c)
-				return
-			}
-			dec.scanp++
-			dec.tokenState = tokenObjectValue
-			continue
-
-		case ',':
-			if dec.tokenState == tokenArrayComma {
-				dec.scanp++
-				dec.path.IncrementArrayIndex()
-				dec.tokenState = tokenArrayValue
-				continue
-			}
-			if dec.tokenState == tokenObjectComma {
-				dec.scanp++
-				dec.tokenState = tokenObjectKey
-				continue
-			}
-			dec.done <- dec.tokenError(c)
-			return
-
-		case '"':
-			if dec.tokenState == tokenObjectStart || dec.tokenState == tokenObjectKey {
-				old := dec.tokenState
-				dec.tokenState = tokenTopValue
-				keyBytes, err := dec.decodeBytes()
-				dec.tokenState = old
-				if err != nil {
-					dec.done <- err
-					return
-				}
-				dec.tokenState = tokenObjectColon
-				dec.path.SetObjectKey(keyBytes[1 : len(keyBytes)-1])
-				continue
-			}
-			fallthrough
-
-		default:
-			if !dec.tokenValueAllowed() {
-				dec.done <- dec.tokenError(c)
-				return
-			}
-
-			if bytes, err := dec.decodeBytes(); err != nil {
-				dec.done <- err
-				return
-			} else {
-				curPath := dec.path.Path()
-				if match, itemDecoder := matcher(matchers).match(curPath); match {
-					if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
-						dec.done <- err
-						return
-					}
-				}
-			}
-		}
-	}
-	dec.done <- nil
-	return
-
 }
 
 func (dec *StreamDecoder) tokenError(c byte) error {

@@ -22,9 +22,7 @@ type SyntaxError struct {
 }
 
 func (e *SyntaxError) Error() string {
-
 	return e.msg
-
 }
 
 // A scanner is a JSON scanning state machine.
