@@ -153,57 +153,62 @@ func TestDecodePathMultiple(t *testing.T) {
 			name: "stream array match",
 			path: "$.store.book",
 			want: []string{
-				`{
+				`[
+            {
                 "category": "reference",
                 "author": "Nigel Rees",
                 "title": "Sayings of the Century",
                 "price": 8.95
-            }`,
-				`{
+            },
+            {
                 "category": "fiction",
                 "author": "Evelyn Waugh",
                 "title": "Sword of Honour",
                 "price": 12.99
-            }`,
-				`{
+            },
+            {
                 "category": "fiction",
                 "author": "Herman Melville",
                 "title": "Moby Dick",
                 "isbn": "0-553-21311-3",
                 "price": 8.99
-            }`,
-				`{
+            },
+            {
                 "category": "fiction",
                 "author": "J. R. R. Tolkien",
                 "title": "The Lord of the Rings",
                 "isbn": "0-395-19395-8",
                 "price": 22.99
-            }`, `{
+            }
+        ]`,
+				`[
+            {
                 "category": "reference",
                 "author": "Nigel Rees",
                 "title": "Sayings of the Century",
                 "price": 8.95
-            }`,
-				`{
+            },
+            {
                 "category": "fiction",
                 "author": "Evelyn Waugh",
                 "title": "Sword of Honour",
                 "price": 12.99
-            }`,
-				`{
+            },
+            {
                 "category": "fiction",
                 "author": "Herman Melville",
                 "title": "Moby Dick",
                 "isbn": "0-553-21311-3",
                 "price": 8.99
-            }`,
-				`{
+            },
+            {
                 "category": "fiction",
                 "author": "J. R. R. Tolkien",
                 "title": "The Lord of the Rings",
                 "isbn": "0-395-19395-8",
                 "price": 22.99
-            }`,
+            }
+        ]`,
 			},
 		},
 		{
@@ -378,7 +383,7 @@ func TestHandleRoot(t *testing.T) {
 			path:  "$.",
 			input: `["abc"]`,
 			want: []string{
-				`"abc"`,
+				`["abc"]`,
 			},
 		},
 		{
@@ -403,8 +408,8 @@ func TestHandleRoot(t *testing.T) {
 			path:  "$.",
 			input: `["abc"]["abc"]`,
 			want: []string{
-				`"abc"`,
-				`"abc"`,
+				`["abc"]`,
+				`["abc"]`,
 			},
 		},
 		{

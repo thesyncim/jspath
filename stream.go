@@ -119,22 +119,32 @@ func (dec *StreamDecoder) decode(decoders ...decoder) {
 				return
 			}
 			curPath := dec.path.Path()
-			dec.scanp++
-			dec.tokenStack = append(dec.tokenStack, dec.tokenState)
-			dec.tokenState = tokenArrayStart
 			if dec.more() {
 				dec.path.StartArray()
 				match, itemDecoder := matcher(decoders).match(curPath)
 				if match {
-					if err := dec.decodeAll(itemDecoder, curPath); err != nil {
+					bytes, err := dec.decodeBytes()
+					if err != nil {
 						if err == io.EOF {
 							break
 						}
 						dec.done <- err
 						return
 					}
+					//update state
+					dec.path.EndArray()
+					dec.tokenValueEnd()
+
+					if err := itemDecoder.unmarshaler.UnmarshalStream(curPath, bytes); err != nil {
+						dec.done <- err
+						return
+					}
+					continue
 				}
 			}
+			dec.scanp++
+			dec.tokenStack = append(dec.tokenStack, dec.tokenState)
+			dec.tokenState = tokenArrayStart
 			continue
 		case ']':
 			if dec.tokenState != tokenArrayStart && dec.tokenState != tokenArrayComma {
