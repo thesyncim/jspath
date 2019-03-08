@@ -45,7 +45,7 @@ type StreamDecoder struct {
 	context context.Context
 
 	done chan struct{}
-	path *pathBuilder
+	path pathBuilder
 }
 
 // NewStreamDecoder returns a new StreamDecoder that reads from r.
@@ -101,13 +101,7 @@ func (dec *StreamDecoder) Reset(reader io.Reader) (err error) {
 		panic("cannot call reset while decoder is running")
 	}
 	dec.done = make(chan struct{})
-	for i := range dec.path.Segments {
-		dec.path.Segments[i].Reset()
-	}
-	dec.path.Segments = dec.path.Segments[0:0]
-	dec.path.pathBuf.Reset()
-	dec.path.Extend()
-	dec.path.LastSegment().WriteByte('$')
+	dec.path.Reset()
 	dec.tokenStack = dec.tokenStack[0:0]
 	dec.tokenState = 0
 	dec.context = context.Background()
